@@ -3,8 +3,6 @@ import os
 import time
 from queue import Queue
 from threading import Lock
-from tkinter import NO
-from traceback import print_tb
 from Robotic_Arm.rm_robot_interface import *
 import math, h5py
 import cv2
@@ -13,8 +11,6 @@ from tqdm import tqdm
 from pyorbbecsdk import *
 # from deploy.remote_control import posRecorder
 from utils import frame_to_bgr_image
-from pynput.keyboard import Listener, Key
-from pynput import keyboard
 import random
 import serial
 from PyQt5.QtWidgets import QApplication, QWidget, QComboBox, QLineEdit,QPushButton, QLabel, QVBoxLayout,QProgressBar
@@ -22,7 +18,6 @@ from PyQt5.QtGui import QScreen
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtCore import QTimer,QThread, pyqtSignal
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
 
 frames_queue_lock = Lock()
 
@@ -337,16 +332,15 @@ class ACTION_PLAN(QThread):
             self.Robot.rm_65_b_right_arm.rm_movej_p(position_,self.velocity,0,0,1)
     def run(self):
         while self.running:
-            # print(self.running)
             self.run_thread()
             self.back_thread()
         
     def run_thread(self):
         index=0
-        # print(self.start_point,self.local_desktop_point,self.local_desktop_point)
-      
-        # print("GPCONTROL_COMMAND",GPCONTROL_COMMAND)
+
         if self.start_point is not  None or self.local_desktop_point is not None or self.goal_point is not None:           
+            COMPLETED=False
+            self.complete_signal.emit(COMPLETED)
             self.move(self.start_point)
             GPCONTROL_COMMAND=2
             self.action_signal.emit(GPCONTROL_COMMAND)
@@ -374,6 +368,8 @@ class ACTION_PLAN(QThread):
         else:
             raise ValueError (f"no point is set")
     def back_thread(self):
+        COMPLETED=False
+        self.complete_signal.emit(COMPLETED)
         self.move(self.goal_point ,up=True)
         GPCONTROL_COMMAND=2
         self.action_signal.emit(GPCONTROL_COMMAND)
@@ -512,8 +508,8 @@ class CAMEAR():
         self.pipelines: list[Pipeline] = []
         self.configs: list[Config] = []
         self.serial_number_list:list[str] = ["" for _ in range(self.curr_device_cnt) ]
-        self.color_frames_queue: list[Queue] = [Queue() for _ in range(self.curr_device_cnt)]
-        self.depth_frames_queue: list[Queue] = [Queue() for _ in range(self.curr_device_cnt)]
+        self.color_frames_queue: dict[str, Queue] = {}
+        self.depth_frames_queue: dict[str, Queue] = {}
         self.setup_cameras()
         self.start_streams()
         # self.frames:FrameSet=None
@@ -527,12 +523,17 @@ class CAMEAR():
         if self.curr_device_cnt > MAX_DEVICES:
             print("Too many devices connected")
             return
+
         for i in range(self.curr_device_cnt):
             device = self.device_list.get_device_by_index(i)
+            serial_number = device.get_device_info().get_serial_number()
+            
+            # **初始化帧队列**
+            self.color_frames_queue[serial_number] = Queue()
+            self.depth_frames_queue[serial_number] = Queue()
+
             pipeline = Pipeline(device)
             config = Config()
-            serial_number = device.get_device_info().get_serial_number()
-            self.serial_number_list[i] = serial_number
             sync_config_json = multi_device_sync_config[serial_number]
             sync_config = device.get_multi_device_sync_config()
             sync_config.mode = self.sync_mode_from_str(sync_config_json["config"]["mode"])
@@ -541,84 +542,85 @@ class CAMEAR():
             sync_config.trigger_out_enable = sync_config_json["config"]["trigger_out_enable"]
             sync_config.trigger_out_delay_us = sync_config_json["config"]["trigger_out_delay_us"]
             sync_config.frames_per_trigger = sync_config_json["config"]["frames_per_trigger"]
-            # print(f"Device {serial_number} sync config: {sync_config}")
+
             device.set_multi_device_sync_config(sync_config)
+
             try:
                 profile_list = pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
-                color_profile:VideoStreamProfile = profile_list.get_default_video_stream_profile()
+                color_profile: VideoStreamProfile = profile_list.get_default_video_stream_profile()
                 config.enable_stream(color_profile)
                 profile_list = pipeline.get_stream_profile_list(OBSensorType.DEPTH_SENSOR)
                 depth_profile = profile_list.get_default_video_stream_profile()
                 config.enable_stream(depth_profile)
+
                 self.pipelines.append(pipeline)
                 self.configs.append(config)
-            except OBError as e :
+                self.serial_number_list[i] = serial_number
+            except OBError as e:
                 print(f"setup_cameras error:{e}")
 
     def start_streams(self):
         # print(type(self.pipelines),type(self.configs),self.configs,self.curr_device_cnt)
         index = 0
         # print(self.serial_number_list)
-        for pipeline, config in zip(self.pipelines,self.configs):
-            # print(f"index{index}")
+        for index, (pipeline, config, serial) in enumerate(zip(self.pipelines, self.configs, self.serial_number_list)):
             pipeline.start(
                 config,
-                lambda frame_set, curr_index=self.serial_number_list[index]:self.on_new_frame_callback(
-                    frame_set, curr_index
+                lambda frame_set, curr_serial=serial: self.on_new_frame_callback(
+                    frame_set, curr_serial
                 ),
             )
-            index+=1
     def stop_straems(self):
         for pipeline in self.pipelines:
             pipeline.stop()
         self.pipelines=[]
         self.configs=[]
         print("device stoped")
-    def on_new_frame_callback(self,frames: FrameSet, serial_number: str):
+    def on_new_frame_callback(self, frames: FrameSet, serial_number: str):
         global MAX_QUEUE_SIZE
-        # self.frames=frames
-        # print(serial_number)
-        if serial_number == camera_sn['right_wrist']:
-            index=0
-        elif serial_number == camera_sn['top']:
-            index=1
-        elif serial_number == camera_sn['left_wrist']:
-            index=2
-        else:
-            # print(serial_number)
-            raise ValueError("变量错误：on frame callback 相机sn未在camera sn中")
-        # print(frames.get_data())
+
+        if serial_number not in self.color_frames_queue:
+            print(f"⚠️ WARN: 未识别的相机序列号 {serial_number}，跳过帧处理")
+            return
+
+        # **获取帧**
         color_frame = frames.get_color_frame()
         depth_frame = frames.get_depth_frame()
+
+        # **处理彩色帧**
         if color_frame is not None:
-            if self.color_frames_queue[index].qsize() >= MAX_QUEUE_SIZE:
-                self.color_frames_queue[index].get()
-            self.color_frames_queue[index].put(color_frame)
+            if self.color_frames_queue[serial_number].qsize() >= MAX_QUEUE_SIZE:
+                self.color_frames_queue[serial_number].get()
+            self.color_frames_queue[serial_number].put(color_frame)
+
+        # **处理深度帧**
         if depth_frame is not None:
-            # print(self.depth_frames_queue)
-            if self.depth_frames_queue[index].qsize() >= MAX_QUEUE_SIZE:
-                self.depth_frames_queue[index].get()
-            self.depth_frames_queue[index].put(depth_frame)
-    
-    def rendering_frame(self):
-        image_list: dict[int, np.ndarray] = {}
-        while len(image_list)!=self.curr_device_cnt:  # 直接判断字典长度
-            for i in range(self.curr_device_cnt):
-                # print(self.curr_device_cnt)
+            if self.depth_frames_queue[serial_number].qsize() >= MAX_QUEUE_SIZE:
+                self.depth_frames_queue[serial_number].get()
+            self.depth_frames_queue[serial_number].put(depth_frame)
+
+    def rendering_frame(self, max_wait=5):
+        image_list: dict[str, np.ndarray] = {}
+        start_time = time.time()  # 记录开始时间
+        color_width, color_height = None, None  # 用于存储最终拼接尺寸
+
+        while len(image_list) != self.curr_device_cnt:  # 直接判断字典长度
+            if time.time() - start_time > max_wait:  # **超时处理**
+                print("⚠️ WARN: 渲染超时，部分相机未收到帧数据")
+                break
+
+            for serial_number in self.color_frames_queue.keys():
                 color_frame = None
                 depth_frame = None
-                if not self.color_frames_queue[i].empty():
-                    color_frame = self.color_frames_queue[i].get()
-                # else:
-                #     print("color_frames_queue is empty")
-                if not self.depth_frames_queue[i].empty():
-                    depth_frame = self.depth_frames_queue[i].get()
-                # else:
-                #     print("depth_frames_queue is empty")
+
+                if not self.color_frames_queue[serial_number].empty():
+                    color_frame = self.color_frames_queue[serial_number].get()
+                if not self.depth_frames_queue[serial_number].empty():
+                    depth_frame = self.depth_frames_queue[serial_number].get()
+
                 if color_frame is None and depth_frame is None:
-                    # print("color_frame is None and depth_frame is None")
-                    continue
-                
+                    continue  # 跳过无数据的相机
+
                 color_image = None
                 depth_image = None
 
@@ -631,26 +633,23 @@ class CAMEAR():
                     scale = depth_frame.get_depth_scale()
                     depth_format = depth_frame.get_format()
                     if depth_format != OBFormat.Y16:
-                        print("depth format is not Y16")
+                        print(f"⚠️ WARN: 相机 {serial_number} 深度格式非 Y16，跳过处理")
                         continue
                     depth_data = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape((height, width))
                     depth_data = (depth_data.astype(np.float32) * scale).astype(np.uint8)
                     depth_image = cv2.applyColorMap(cv2.normalize(depth_data, None, 0, 255, cv2.NORM_MINMAX), cv2.COLORMAP_JET)
 
                 if color_image is not None:
-                    image_list[i] = color_image
+                    image_list[serial_number] = color_image  # 使用 `serial_number` 作为 key
 
-            # 确保 `image_list` 不会超过 `curr_device_cnt`
-            if len(image_list) > self.curr_device_cnt:
-                image_list.clear()
-                continue
-            # 拼接所有图像
-            if len(image_list) == self.curr_device_cnt:
+            # **拼接所有图像**
+            if len(image_list) == self.curr_device_cnt and color_width is not None and color_height is not None:
                 result_image = np.hstack(list(image_list.values()))
-                result_image = cv2.resize(result_image, (color_width, color_height))  # 保持一致的尺寸
+                result_image = cv2.resize(result_image, (color_width, color_height))  # 统一尺寸
                 break
-            # print(image_list)
+
         return image_list
+
     def rendering_frame_(self):
         global stop_rendering
         image_list: dict[int, np.ndarray] = {}
@@ -712,6 +711,7 @@ class CAMEAR():
         for device in config["devices"]:
             multi_device_sync_config[device["serial_number"]] = device
             print(f"Device {device['serial_number']}: {device['config']['mode']}")
+
 class run_main_windows(QWidget):
     def __init__(self):
         super().__init__()
@@ -775,7 +775,7 @@ class run_main_windows(QWidget):
 
         # 创建输入框（QLineEdit）
         self.input_box = QLineEdit()
-        self.input_box.setPlaceholderText("txt..")  # 设置占位符
+        self.input_box.setPlaceholderText("input position")  # 设置占位符
         layout.addWidget(QLabel("data:"))  # 标签
         layout.addWidget(self.input_box)
 
@@ -914,11 +914,13 @@ class run_main_windows(QWidget):
     def save_data(self):
         self.action_list = self.qpos_list
         if self.qpos_list is not None:
-            self.qpos_list = np.vstack([self.qpos_list[0], self.qpos_list])
+            # self.qpos_list = np.vstack([self.qpos_list[0], self.qpos_list])
+            self.qpos_array = np.vstack([self.qpos_list[0], self.qpos_list])  # 存入一个新变量
+
         else:
             raise "qpos is none"
         self.data_dict = {
-            '/observations/qpos': self.qpos_list[:self.max_episode_len],
+            '/observations/qpos': self.qpos_array[:self.max_episode_len],
             '/action': self.action_list[:self.max_episode_len],
             # '/gp/gpstate': self.gpstate_list[:self.max_episode_len],
             # '/gp/gppos': self.gppos_list[:self.max_episode_len],
@@ -943,39 +945,41 @@ class run_main_windows(QWidget):
         """启动摄像头"""
         self.stop_render =False
         self.camear_timer.start()
-        
-        
-        # self.camera.setup_cameras()
-        # self.camera.start_streams()
+
     def updata_camera(self):
-        image_list=self.camera.rendering_frame()
-        # 获取字典的长度
-        # print(image_list)
-        if image_list !={}:
-            num_images = len(image_list)
+        """更新摄像头图像"""
+        image_list = self.camera.rendering_frame()
+        serial_number_list=self.camera.serial_number_list
+        if not image_list:  # 避免空数据
+            print("⚠️ WARN: 没有接收到任何摄像头图像")
+            return
 
-            # 如果字典中有多个图像，进行水平拼接
-            if num_images > 1:
-                result_image = image_list[0]
-                for i in range(1, num_images):
-                    result_image = np.hstack((result_image, image_list[i]))
+        num_images = len(image_list)
+        
+        # 使用 `.values()` 进行拼接，保持字典顺序
+        images = list(image_list.values())
+        
+        if num_images > 1:
+            for _ in image_list:
+                # result_image = np.hstack((image_list[serial_number_list[0]],image_list[serial_number_list[1]]))
+                result_image = np.hstack(( image_list[serial_number_list[0]], image_list[serial_number_list[1]]))
+        else:
+            result_image = images[0]
 
-                # 确保拼接后的图像大小不超过 1080x720
-                result_image = cv2.resize(result_image, (min(result_image.shape[1], 1920), min(result_image.shape[0], 720)))
-            else:
-                # 如果字典中只有一张图像，直接使用该图像
-                result_image = image_list[0]
-                result_image = cv2.resize(result_image, (min(result_image.shape[1], 1920), min(result_image.shape[0], 720)))
-            self.image['top']=image_list[0]
-            self.image['right_wrist']=image_list[1]
+        # 确保拼接后的图像大小不超过 1920x720
+        result_image = cv2.resize(result_image, (min(result_image.shape[1], 1920), min(result_image.shape[0], 720)))
+
+        # **改用 key 赋值**
+
+        self.image['top'] = image_list.get(serial_number_list[0], None)  # 获取第一台摄像头的图像
+        self.image['right_wrist'] = image_list.get(serial_number_list[1], None) if num_images > 1 else None  # 获取第二台摄像头的图像（如果有）
+
+        # **显示图像**
+        if self.stop_render is False:
             color_height, color_width, ch = result_image.shape
-            # print(self.image)
-            # # 转换为 QImage
-            if self.stop_render is False:
-                qt_img = QImage(result_image, color_width, color_height, ch*color_width, QImage.Format_RGB888)
-                # 在 QLabel 上显示
-                qimage = qt_img.rgbSwapped() 
-                self.label.setPixmap(QPixmap.fromImage(qimage))
+            qt_img = QImage(result_image, color_width, color_height, ch * color_width, QImage.Format_RGB888)
+            qimage = qt_img.rgbSwapped()
+            self.label.setPixmap(QPixmap.fromImage(qimage))
 
     def stop_camera(self):
         """关闭摄像头"""
@@ -993,8 +997,6 @@ class run_main_windows(QWidget):
         self.gpcontrol.close()
         self.gpcontrol.stop()
         event.accept()
-
-
 
 if __name__ == '__main__':
     app = QApplication([])
