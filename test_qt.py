@@ -1,81 +1,49 @@
+
+from tt import CAMERA_HOT_PLUG
+from PyQt5.QtWidgets import QApplication, QLabel, QWidget, QVBoxLayout
+from PyQt5.QtGui import QImage, QPixmap
+from PyQt5.QtCore import QTimer
 import sys
 import cv2
 import numpy as np
-from PyQt5.QtWidgets import QApplication, QLabel, QWidget, QVBoxLayout, QPushButton
-from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtCore import QThread, pyqtSignal
-
-class VideoThread(QThread):
-    frame_signal = pyqtSignal(QImage)  # 发送处理后的 QImage
-
-    def __init__(self):
-        super().__init__()
-        self.running = True  # 线程运行状态
-        self.cap = cv2.VideoCapture(0)  # 连接摄像头
-
-    def run(self):
-        """ 运行线程，读取摄像头帧 """
-        while self.running:
-            ret, frame = self.cap.read()
-            if ret:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                h, w, ch = frame.shape
-                bytes_per_line = ch * w
-                qt_img = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
-                self.frame_signal.emit(qt_img)  # 发送信号
-
-    def stop(self):
-        """ 停止线程 """
-        self.running = False
-        self.cap.release()
-        self.quit()
-        self.wait()
 
 class CameraApp(QWidget):
-    def __init__(self):
+    def __init__(self, camera_system):
         super().__init__()
-        self.setWindowTitle("PyQt5 QThread 采集相机")
+        self.camera_system = camera_system  # 相机管理对象
+        self.init_ui()
+        self.start_timer()
+
+    def init_ui(self):
+        self.setWindowTitle("Orbbec Camera Viewer")
         self.setGeometry(100, 100, 800, 600)
+        self.layout = QVBoxLayout()
+        self.image_label = QLabel(self)
+        self.layout.addWidget(self.image_label)
+        self.setLayout(self.layout)
 
-        self.label = QLabel(self)
-        self.label.setFixedSize(640, 480)
+    def start_timer(self):
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_frame)
+        self.timer.start(30)  # 每 30ms 获取一次帧数据
 
-        self.start_button = QPushButton("启动相机", self)
-        self.stop_button = QPushButton("关闭相机", self)
+    def update_frame(self):
+        frame_data = self.camera_system.rendering_frame()
+        if isinstance(frame_data, np.ndarray):  # 只有一台相机
+            self.display_image(frame_data)
+        elif isinstance(frame_data, dict):  # 多台相机
+            for serial, img in frame_data.items():
+                self.display_image(img)  # 这里只显示最后一台相机的画面
 
-        layout = QVBoxLayout()
-        layout.addWidget(self.label)
-        layout.addWidget(self.start_button)
-        layout.addWidget(self.stop_button)
-        self.setLayout(layout)
-
-        self.start_button.clicked.connect(self.start_camera)
-        self.stop_button.clicked.connect(self.stop_camera)
-
-        self.thread = None  # 视频线程
-
-    def start_camera(self):
-        if not self.thread:
-            self.thread = VideoThread()
-            self.thread.frame_signal.connect(self.update_frame)
-            self.thread.start()
-
-    def update_frame(self, qt_img):
-        """ 更新 QLabel 上的画面 """
-        self.label.setPixmap(QPixmap.fromImage(qt_img))
-
-    def stop_camera(self):
-        if self.thread:
-            self.thread.stop()
-            self.thread = None
-            self.label.clear()
-
-    def closeEvent(self, event):
-        self.stop_camera()
-        event.accept()
+    def display_image(self, image):
+        height, width, channel = image.shape
+        bytes_per_line = 3 * width
+        qt_image = QImage(image.data, width, height, bytes_per_line, QImage.Format_BGR888)
+        self.image_label.setPixmap(QPixmap.fromImage(qt_image))
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    win = CameraApp()
-    win.show()
+    camera_system = CAMERA_HOT_PLUG()  # 初始化相机
+    window = CameraApp(camera_system)
+    window.show()
     sys.exit(app.exec_())
