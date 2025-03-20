@@ -1177,7 +1177,7 @@ class run_main_windows(QWidget):
         self.action_plan.stop()
         self.camear_timer.stop()
         self.task_timer.stop()
-        self.camera.stop_straems()
+        self.camera.stop_streams()
         self.gpcontrol.close()
         self.gpcontrol.stop()
         event.accept()
