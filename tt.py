@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 from pyorbbecsdk import *
-from tcp_tx import PersistentClient
+from TEST.tcp_tx import PersistentClient
 from utils import frame_to_bgr_image
 import random
 import serial

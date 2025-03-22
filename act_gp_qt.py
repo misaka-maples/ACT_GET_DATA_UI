@@ -23,34 +23,15 @@ frames_queue_lock = Lock()
 # Configuration settings
 MAX_DEVICES = 3
 MAX_QUEUE_SIZE = 2
-ESC_KEY = 27
 save_points_dir = os.path.join(os.getcwd(), "point_clouds")
 save_depth_image_dir = os.path.join(os.getcwd(), "depth_images")
 save_color_image_dir = os.path.join(os.getcwd(), "color_images")
 
-frames_queue: list[Queue] = [Queue() for _ in range(MAX_DEVICES)]
-stop_processing = False
-curr_device_cnt = 0
-
 # Load config file for multiple devices
-config_file_path = os.path.join(os.path.dirname(__file__), "../pyorbbecsdk/config/multi_device_sync_config.json")
+config_file_path = os.path.join(os.path.dirname(__file__), "../config/multi_device_sync_config.json")
 multi_device_sync_config = {}
 camera_names = ['top', 'right_wrist']
-camera_sn = {
-    'top':'CP1E54200056',#index=0
-    'right_wrist':'CP1L44P0006E',#index=1
-}
-COMPLETED:bool=False
-GPCONTROL_COMMAND:int=0
-#是位置姿态不是关节值
-zero_pos = [0, 0, 0, 0, 0, 0]
-original_pos = [-0.242293, 0.055747, 0.692225, -1.569, -0.597, 1.472]#空中点位
-final_pos =  [-0.300054, 0.215523, 0.493377, -2.749, -0.706, 1.804]#桌面点位
-standard_start_pos = [-0.19953, 0.169551, 0.685523, -1.605, -0.672, 0.916]#桌面点位
-test_pos =[-0.106262, 0.165886, 0.68286, 1.667, 0.764, -2.07]
-test_pos_2 = [-0.136529, 0.041631, 0.681072, 1.808, 0.971, -1.668]
-# original_pos=test_pos_2
-# final_pos=test_pos_2
+
 """
 ███████████████████████████████████████
 █  重要提示:  █未测试，仅完成
@@ -283,16 +264,16 @@ class ROBOT:
         self.joint_state_right=None
         self.Client = PersistentClient('192.168.3.15', 8001)
         
-        self.rm_65_b_right_arm = (RoboticArm(rm_thread_mode_e.RM_TRIPLE_MODE_E))
-        self.arm_ini = self.rm_65_b_right_arm.rm_create_robot_arm("192.168.1.18",8080, level=3)
+        # self.rm_65_b_right_arm = (RoboticArm(rm_thread_mode_e.RM_TRIPLE_MODE_E))
+        # self.arm_ini = self.rm_65_b_right_arm.rm_create_robot_arm("192.168.1.18",8080, level=3)
 
     def get_state(self, model='joint'):#pose
-        self.joint_state_right = self.rm_65_b_right_arm.rm_get_current_arm_state()
-        return_action = self.joint_state_right[1][model]
+        # self.joint_state_right = self.rm_65_b_right_arm.rm_get_current_arm_state()
+        # return_action = self.joint_state_right[1][model]
         if model=='joint':
-            action=self.Client.get_arm_postion_joint()
+            action=self.Client.get_arm_postion_joint(robotnum=1)
         elif model=='pose':
-            action = self.Client.get_arm_position_pose()
+            action = self.Client.get_arm_position_pose(robotnum=1)
         
         return action
 
@@ -356,8 +337,8 @@ class ACTION_PLAN(QThread):
         else:
             raise ValueError (f"no point is set")
     def back_thread(self):
-        COMPLETED=False
-        self.complete_signal.emit(COMPLETED)
+
+        self.complete_signal.emit(False)
         self.move(self.goal_point ,up=True)
         self.action_signal.emit(2)
         self.move(self.goal_point)
@@ -384,7 +365,7 @@ class ACTION_PLAN(QThread):
         """ 停止线程 """
         self.running = False
         
-        self.Robot.rm_65_b_right_arm.rm_set_delete_current_trajectory()
+        # self.Robot.rm_65_b_right_arm.rm_set_delete_current_trajectory()
         self.quit()
         self.wait()
 class GENERATOR_HDF5:
@@ -747,6 +728,7 @@ class CAMERA_HOT_PLUG:
         for i in range(self.curr_device_cnt):
             device = self.device_list.get_device_by_index(i)
             serial_number = device.get_device_info().get_serial_number()
+            
             self.color_frames_queue[serial_number] = Queue()
             self.depth_frames_queue[serial_number] = Queue()
             pipeline = Pipeline(device)
@@ -832,11 +814,12 @@ class CAMERA_HOT_PLUG:
                 color_width, color_height = color_frame.get_width(), color_frame.get_height()
                 color_image = frame_to_bgr_image(color_frame)
                 image_dict[serial_number] = color_image
-        if len(image_dict) == self.curr_device_cnt and color_width is not None and color_height is not None:
-            result_image = np.hstack(list(image_dict.values()))
-            result_image = cv2.resize(result_image, (color_width, color_height))
-            return result_image
-        return image_dict
+        # if len(image_dict) == self.curr_device_cnt and color_width is not None and color_height is not None:
+        #     result_image = np.hstack(list(image_dict.values()))
+        #     result_image = cv2.resize(result_image, (color_width, color_height))
+            # return result_image
+        # print(f"image_dict: {type(image_dict)}")
+        return image_dict,color_width, color_height
     def sync_mode_from_str(self, sync_mode_str: str) -> OBMultiDeviceSyncMode:
 
         # to lower case
@@ -887,12 +870,12 @@ class run_main_windows(QWidget):
         self.gppos_list=[]
         self.gpforce_list=[]
         self.gpstate=[]
-        self.max_episode_len=500
+        self.max_episode_len=5000
         self.data_dict:dict[str,np.array]={}
         self.index=0
         self.index_length=10
         self.start_pos,self.local_desktop_pos,self.goal_pos=None,None,None
-        
+        self.complete_sign = False
 
     def create_widget(self):
         self.setWindowTitle("ACT GET DATA")
@@ -907,7 +890,7 @@ class run_main_windows(QWidget):
         self.camear_timer = QTimer()
         self.camear_timer.timeout.connect(self.updata_frame)
         self.task_timer = QTimer()
-        self.task_timer.timeout.connect(self.updata_task)
+        self.task_timer.timeout.connect(self.updata_collect_task)
 
         # 主布局管理器
         layout = QVBoxLayout()
@@ -982,8 +965,16 @@ class run_main_windows(QWidget):
         # 进度条
         self.progress_bar = QProgressBar(self)
         self.progress_bar.setValue(0)
+        self.progress_bar.setRange(0, 500)
         layout.addWidget(self.progress_bar)
 
+        self.start_button = QPushButton("开始采集", self)
+        self.start_button.clicked.connect(self.start_collect)
+        button_layout.addWidget(self.start_button)
+
+        self.start_button = QPushButton("停止采集", self)
+        self.start_button.clicked.connect(self.stop_collect)
+        button_layout.addWidget(self.start_button)
         # 设置窗口的布局
         self.setLayout(layout)
         print("控件初始化完成")
@@ -998,7 +989,7 @@ class run_main_windows(QWidget):
         elif selected_option == 'goal' and input_text !='':
             self.goal_pos =  json.loads(input_text)
         else:
-            self.label_.setText("input is none or pose error")
+            self.result_label.setText("input is none or pose error")
         self.result_label.setText(f"select: {selected_option},input: {input_text}")
     def on_get_robot_state_btn_click(self):
         self.gpcontrol.start()
@@ -1030,53 +1021,56 @@ class run_main_windows(QWidget):
         self.gpcontrol.stop()
         self.action_plan.stop()
         pass
-    def updata_task(self):
+    def updata_collect_task(self):
         start_time=time.time()
         self.progress_value += 1
+        # print(f"当前进度: {self.progress_value}")
         self.progress_bar.setValue(self.progress_value)
         angle_qpos=self.robot.get_state()
         radius_qpos = [math.radians(j) for j in angle_qpos]
-        # radius_qpos.append(self.robot.rm_65_b_right_arm.rm_get_tool_voltage()[1])
-        mid_time=time.time()
-        if self.gpstate !=[]:
-            gpdata=self.gpstate
-            gpstate,gppos,gpforce = gpdata
-            if not isinstance(gpstate, str):
-                gpstate = str(gpstate)
-            if not isinstance(gppos, str):
-                gppos = str(gppos)
-            if not isinstance(gpforce, str):
-                gpforce = str(gpforce)
-            radius_qpos.append(np.array(int(gpstate, 16), dtype='int32'))
-            radius_qpos.append(np.array(int(gppos, 16), dtype='int32'))
-            radius_qpos.append(np.array(int(gpforce, 16), dtype='int32'))
+         # 处理 gpstate
+        if self.gpstate:
+            gpstate, gppos, gpforce = map(lambda x: str(x) if not isinstance(x, str) else x, self.gpstate)
+            radius_qpos.extend([int(gpstate, 16), int(gppos, 16), int(gpforce, 16)])
+
+        # 记录 qpos 数据
         self.qpos_list.append(radius_qpos)
-        if self.image !={}:
-            self.images_dict['top'].append(self.image['top'])
-            self.images_dict['right_wrist'].append(self.image['right_wrist'])
-        if COMPLETED==True and self.index >= self.index_length:
-            print('task completed')
-            self.action_plan.stop()
-            self.task_timer.stop()
-        elif COMPLETED == True:
-            self.save_data()
-            print("completed data collection")
-        end_time=time.time()
-        time_=end_time-start_time
-        print(f"\033[31mend_time-start_time:{time_}\nmid_time:{end_time-mid_time}\nmid-start:{mid_time-start_time}\033[0m")
+
+        # 记录图像数据
+        if self.image:
+            self.images_dict['top'].append(self.image.get('top'))
+            self.images_dict['right_wrist'].append(self.image.get('right_wrist'))
+
+        mid_time = time.time()
+
+        # 任务完成检查
+        if self.complete_sign:
+            if self.index >= self.index_length:
+                print('task completed')
+                self.action_plan.stop()
+                self.task_timer.stop()
+            else:
+                self.save_data()
+                print("completed data collection")
+
+        # 计算耗时
+        end_time = time.time()
+        print(f"\033[31mend_time-start_time:{end_time - start_time}\n"
+            f"mid_time:{end_time - mid_time}\n"
+            f"mid-start:{mid_time - start_time}\033[0m")
     def handle_feedback(self,feed_back):
         self.gpstate=feed_back
     def handle_action_signal(self,action_feed_back):
         self.gpcontrol.set_state_flag(action_feed_back)
     def handle_complete_signal(self,complete_feed_back):
-        global COMPLETED
-        COMPLETED=complete_feed_back
+        self.complete_sign =complete_feed_back
         print("接受完成信号")
     def handle_error_signal(self,error_feed_back):
         print(error_feed_back)
         self.result_label.setText(error_feed_back)
     def save_data(self):
         self.action_list = self.qpos_list
+        self.max_episode_len=self.progress_value
         if self.qpos_list is not None:
             # self.qpos_list = np.vstack([self.qpos_list[0], self.qpos_list])
             self.qpos_array = np.vstack([self.qpos_list[0], self.qpos_list])  # 存入一个新变量
@@ -1105,13 +1099,17 @@ class run_main_windows(QWidget):
     def start_camera(self):
         """启动摄像头"""
         self.stop_render =False
-        self.camear_timer.start()
+        self.camear_timer.start(10)
 
     def updata_frame(self):
         """更新摄像头图像"""
-        frame_data = self.camera.rendering_frame()
+        global multi_device_sync_config
+        frame_data, color_width, color_height = self.camera.rendering_frame()
         serial_number_list = self.camera.serial_number_list
+        camera_index_map = {device['config']['camera_name']: serial_number_list.index(device["serial_number"]) for device in multi_device_sync_config.values() if device["serial_number"] in serial_number_list}
 
+        # print(f"frame_data: {type(frame_data)}")
+        # print(frame_data[serial_number_list[0]].shape)
         # 判断 frame_data 的类型
         if isinstance(frame_data, dict):  # 多台摄像头返回字典 {str: np.ndarray}
             if not frame_data:  # 字典为空
@@ -1120,6 +1118,7 @@ class run_main_windows(QWidget):
             if all(img.size == 0 for img in frame_data.values()):  # 所有相机的图像都是空的
                 print("⚠️ WARN: 所有摄像头的图像数据为空")
                 return
+            # print(f"⚠️ WARN: 多台摄像头，序列号列表: {serial_number_list}")
         elif isinstance(frame_data, np.ndarray):  # 只有一台相机
             if frame_data.size == 0:
                 print("⚠️ WARN: 没有接收到任何摄像头图像")
@@ -1127,37 +1126,36 @@ class run_main_windows(QWidget):
             # 只有一个摄像头时，将其存入字典，模拟多摄像头格式
             frame_data = {"0": frame_data}  
             serial_number_list = ["0"]
+            print(f"⚠️ WARN: 只有一台摄像头，序列号为 {serial_number_list[0]}")
         else:
             print(f"⚠️ ERROR: 无效的 frame_data 类型: {type(frame_data)}")
             return
-
+        # 初始化结果图像
         num_images = len(frame_data)
+        result_image = None
+        for device in multi_device_sync_config.values():
+            cam_name, sn = device['config']['camera_name'], device["serial_number"]
+            if sn in frame_data:
+                img = frame_data[sn]
+                if result_image is None:
+                    result_image = img  # 第一个摄像头的图像
+                else:
+                    result_image = np.hstack((result_image, img))  # 按水平方向拼接图像
+            else:
+                print(f"⚠️ WARN: 摄像头 {cam_name}（{sn}）的图像数据缺失")
 
-        if serial_number_list:
-            first_key = str(serial_number_list[0])
-            if first_key not in frame_data:
-                print(f"⚠️ WARN: 摄像头 {first_key} 的图像数据缺失")
-                return
-
-            # 获取第一台摄像头的图像
-            result_image = frame_data[first_key]
-
-            # 拼接其他摄像头图像
-            for sn in serial_number_list[1:]:
-                sn_str = str(sn)
-                if sn_str in frame_data:
-                    result_image = np.hstack((result_image, frame_data[sn_str]))
-
-            # 显示合成后的图像
+        if result_image is not None:
+            # 调整大小并显示图像
+            result_image = cv2.resize(result_image, (color_width, color_height))
             self.display_image(result_image)
-
-        # 存储图像到 self.image
-        self.image['top'] = frame_data.get(str(serial_number_list[0]), None)
-        self.image['right_wrist'] = frame_data.get(str(serial_number_list[1]), None) if num_images > 1 else None
-
-
+            # 存储图像到 self.image
+            # print(str(serial_number_list[0]),str(serial_number_list[1]))
+            # print(serial_number_list[camera_index_map['top']], serial_number_list[camera_index_map['right_wrist']])
+            if self.task_timer.isActive():
+                self.image['top'] = frame_data.get(str(serial_number_list[camera_index_map['top']]), None)
+                self.image['right_wrist'] = frame_data.get(str(serial_number_list[camera_index_map['right_wrist']]), None) if num_images > 1 else None
+        # time.sleep(0.01)  # 确保每次更新间隔
     def display_image(self,result_image):
-        
         # **显示图像**
         if self.stop_render is False:
             color_height, color_width, ch = result_image.shape
@@ -1171,21 +1169,37 @@ class run_main_windows(QWidget):
         # self.timer.stop()
         self.label.clear()
         # self.camera.stop_straems()
+    def start_collect(self):
+        """开始采集数据"""
+        # self.complete_sign = False
+        self.gpcontrol.start(30)
+        self.task_timer.start(30)
+        self.progress_value = 0  # 复位进度
+    def stop_collect(self):
+        """停止采集数据"""
+        # self.complete_sign = True
+        # self.camear_timer.stop()
+        # self.gpcontrol.stop()
+        self.save_data()
+        self.task_timer.stop()
+        self.result_label.setText("采集已停止")
+       
     def closeEvent(self, event):
         """关闭窗口时释放摄像头"""
-        self.stop_camera()
+        
         self.action_plan.stop()
         self.camear_timer.stop()
         self.task_timer.stop()
-        self.camera.stop_straems()
+        self.camera.stop_streams()
         self.gpcontrol.close()
         self.gpcontrol.stop()
+        self.stop_camera()
         event.accept()
 
-if __name__ == '__main__':
-    app = QApplication([])
-    # 创建并显示窗口
-    window = run_main_windows()
-    window.show()
-    # 启动事件循环
-    app.exec_()
+# if __name__ == '__main__':
+app = QApplication([])
+# 创建并显示窗口
+window = run_main_windows()
+window.show()
+# 启动事件循环
+app.exec_()

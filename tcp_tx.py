@@ -1,6 +1,5 @@
 import socket
-from time import sleep,time
-import threading
+
 import re
 
 class PersistentClient:
@@ -8,7 +7,6 @@ class PersistentClient:
     FOOTER = b'^'
     ENCODING = 'utf-8'
 
-    # HEARTBEAT_INTERVAL = 10  # 🟢 心跳间隔
     RECV_TIMEOUT = 2         # 🟢 读取超6时时间
 
     def __init__(self, host, port):
@@ -20,16 +18,11 @@ class PersistentClient:
         # 建立初始连接
         self.connect()
 
-        # 用于存储接收到的数据的缓冲区
-        self.response_buffer = []
-        # 用于同步访问缓冲区的条件变量
-        self.response_cond = threading.Condition()
+        #初始参数
+        self.vel = 10  #速度
+        self.acc = 10  #加速度
+        self.dcc = 10  #减速度
 
-        # 启动心跳检测线程
-        # threading.Thread(target=self._heartbeat, daemon=True).start()
-
-        # 启动实时读取线程（独立线程，不影响写入）
-        threading.Thread(target=self._receive_data, daemon=True).start()
 
     def _frame_data(self, data):
         """封装数据包（增加协议头和尾部）"""
@@ -62,9 +55,9 @@ class PersistentClient:
 
         try:
             framed_data = self._frame_data(message)
-            print(framed_data)
+            # print(framed_data)
             self.sock.sendall(framed_data)
-            print(f"[INFO] 成功发送 {len(framed_data)} 字节")
+
             return True
         except (BrokenPipeError, ConnectionResetError) as e:
             print(f"[ERROR] 连接断开: {e}")
@@ -90,37 +83,21 @@ class PersistentClient:
     #                 self.connect()
     def _receive_data(self):
         """实时接收数据（独立线程，不影响写入）"""
+        data = None
         while True:
             if self.connected:
                 try:
                     data = self.sock.recv(1024)
-                    if data:
-                        decoded_data = data.decode(self.ENCODING)
-                        print(f"[INFO] 实时接收到数据: {decoded_data}")
-                        # 将数据添加到缓冲区，并通知等待的线程
-                        with self.response_cond:
-                            self.response_buffer.append(decoded_data)
-                            self.response_cond.notify_all()
+                    data = data.decode(self.ENCODING)
+
                 except socket.timeout:
                     continue  # 超时后继续监听
                 except (ConnectionResetError, BrokenPipeError):
                     print("[WARNING] 服务器断开连接，正在重连...")
                     self.connected = False
                     self.connect()
+                return data
 
-
-    def _heartbeat(self):
-        """定期发送心跳包，防止服务器断开连接"""
-        while True:
-            sleep(self.HEARTBEAT_INTERVAL)
-            if self.connected:
-                try:
-                    self.sock.sendall(b"&PING^")
-                    print("[INFO] 发送心跳包")
-                except (BrokenPipeError, ConnectionResetError):
-                    print("[WARNING] 心跳检测失败，连接断开")
-                    self.connected = False
-                    self.connect()
 
     def close(self):
         """关闭连接"""
@@ -152,10 +129,10 @@ class PersistentClient:
 
             if model == "joint":
                 # 关节模式协议示例: &SET_JOINT,1.0000,2.0000,3.0000,4.0000,5.0000,6.0000^
-                command = f"set,{robotnum},10,ACS,0,0,{value_str},0,10,10" #后两个10分别为加速度、减速度
+                command = f"set,{robotnum},{self.vel},ACS,0,0,{value_str},0,{self.acc},{self.dcc}" #后两个10分别为加速度、减速度
             if model == "pose":
                 # 位姿模式协议示例: &SET_POSE,10.0000,20.0000,30.0000,40.0000,50.0000,60.0000^
-                command = f"set,{robotnum},10,PCS,0,0,{value_str},0,10,10"
+                command = f"set,{robotnum},{self.vel},PCS,0,0,{value_str},0,{self.acc},{self.dcc}"
 
             # 调用底层发送方法（会自动添加协议头尾）
             return self.send_message(command)
@@ -172,18 +149,9 @@ class PersistentClient:
             """
             message = f"get,{robotnum},ACS"
             self.send_message(message)
-            start_time = time()
 
-            # 等待响应数据到来
-            with self.response_cond:
-                while not self.response_buffer and (time() - start_time < 5):
-                    remaining = 5 - (time() - start_time)
-                    self.response_cond.wait(timeout=remaining)
-                if self.response_buffer:
-                    response = self.response_buffer.pop(0)  # 取出最早的响应
-                else:
-                    print("[ERROR] 等待响应超时")
-                    response =None
+            response = self._receive_data()
+
 
             match = re.search(r'getPos:"([^"]+)"', response)
             if match:
@@ -194,7 +162,7 @@ class PersistentClient:
                 return [float(i) for i in data_list]
             else:
                 print("[ERROR] 无法解析位置数据")
-                return None
+                # return None
             # 返回接收到的响应字符串
 
     def get_arm_position_pose(self, robotnum):
@@ -206,18 +174,8 @@ class PersistentClient:
         message = f"get,{robotnum},PCS"
         message = message.strip()
         self.send_message(message)
-        start_time = time()
+        response = self._receive_data()
 
-        # 等待响应数据到来
-        with self.response_cond:
-            while not self.response_buffer and (time() - start_time < 5):
-                remaining = 5 - (time() - start_time)
-                self.response_cond.wait(timeout=remaining)
-            if self.response_buffer:
-                response = self.response_buffer.pop(0)  # 取出最早的响应
-            else:
-                print("[ERROR] 等待响应超时")
-                response =None
 
         match = re.search(r'getPos:"([^"]+)"', response)
         if match:
@@ -228,19 +186,12 @@ class PersistentClient:
             return [float(i) for i in data_list]
         else:
             print("[ERROR] 无法解析位置数据")
-            return None
+            # return None
         # 返回接收到的响应字符串
 
 
 if __name__ == "__main__":
     client = PersistentClient('192.168.3.15', 8001)
-    # messages = [ "get,2,ACS"]
-    #
-    #
-    # for msg in messages:
-    #     success = client.send_message(msg)
-    #     print(f"发送状态: {'成功' if success else '失败'}")
-    #     sleep(0.001)  # 等待间隔
 
     while True:
         try:
@@ -260,12 +211,14 @@ if __name__ == "__main__":
                 print(deta)
 
             if message == "2":
-                deta = client.set_arm_position([300.064,3.71456,230.247,3.14159,0.000167089,0],"pose",2)
+                deta = client.set_arm_position([-202, 534.444, 20.8122, -2.85664, -0.0967644, -0.160308],"pose",2)
+
             if message == "3":
-                deta = client.set_arm_position([20,-486.1,430.1,1.66675,-0.0284042,1.48369], "pose", 1)
-            if message.strip():  # 🟢 避免发送空消息
-                success = client.send_message(message)
-                print(f"发送状态: {'成功' if success else '失败'}")
+                deta = client.set_arm_position([300.718, -7.07053, 250.896, 3.14155, 0.0, 0.0], "pose", 1)
+            if message == "4":
+                deta = client.set_arm_position([50.5687,-42.0996,43.3454,2.36686,-42.1309,50.4586], "joint", 2)
+            if message == "5":
+                deta = client.send_message("stop,2")
 
 
 

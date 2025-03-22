@@ -11,7 +11,10 @@ BAUD_RATE = 50000
 # 设置 can1 参数
 set_can1 = b'\x49\x3B\x42\x57\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x45\x2E'
 # 开启 can0、1 通道
-start_can1 = b'\x49\x3B\x44\x57\x01\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x45\x2E'
+start_can = b'\x49\x3B\x44\x57\x01\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x45\x2E'
+# 设置 can0 参数
+set_can0 = b'\x49\x3B\x42\x57\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x45\x2E'
+
 
 
 def list_serial_ports():
@@ -156,10 +159,13 @@ class CANApp:
         """发送 CAN 数据"""
         if self.ser and self.is_sending:
             if not self.is_configured:
+                send_data(self.ser, set_can0)
+                time.sleep(0.1)
+                read_data(self.ser)
                 send_data(self.ser, set_can1)
                 time.sleep(0.1)
                 read_data(self.ser)
-                send_data(self.ser, start_can1)
+                send_data(self.ser, start_can)
                 time.sleep(0.1)
                 read_data(self.ser)
                 self.is_configured = True

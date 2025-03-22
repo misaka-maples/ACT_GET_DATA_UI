@@ -1,49 +1,21 @@
+import os,json
 
-from tt import CAMERA_HOT_PLUG
-from PyQt5.QtWidgets import QApplication, QLabel, QWidget, QVBoxLayout
-from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtCore import QTimer
-import sys
-import cv2
-import numpy as np
+config_file_path = os.path.join(os.path.dirname(__file__), "../config/multi_device_sync_config.json")
 
-class CameraApp(QWidget):
-    def __init__(self, camera_system):
-        super().__init__()
-        self.camera_system = camera_system  # 相机管理对象
-        self.init_ui()
-        self.start_timer()
+multi_device_sync_config = {}
+def read_config(config_file: str):
+    global multi_device_sync_config
+    with open(config_file, "r") as f:
+        config = json.load(f)
+    for device in config["devices"]:
+        multi_device_sync_config[device["serial_number"]] = device
+        # print(f"Device {device['serial_number']}: {device['config']['mode']}")
 
-    def init_ui(self):
-        self.setWindowTitle("Orbbec Camera Viewer")
-        self.setGeometry(100, 100, 800, 600)
-        self.layout = QVBoxLayout()
-        self.image_label = QLabel(self)
-        self.layout.addWidget(self.image_label)
-        self.setLayout(self.layout)
-
-    def start_timer(self):
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_frame)
-        self.timer.start(30)  # 每 30ms 获取一次帧数据
-
-    def update_frame(self):
-        frame_data = self.camera_system.rendering_frame()
-        if isinstance(frame_data, np.ndarray):  # 只有一台相机
-            self.display_image(frame_data)
-        elif isinstance(frame_data, dict):  # 多台相机
-            for serial, img in frame_data.items():
-                self.display_image(img)  # 这里只显示最后一台相机的画面
-
-    def display_image(self, image):
-        height, width, channel = image.shape
-        bytes_per_line = 3 * width
-        qt_image = QImage(image.data, width, height, bytes_per_line, QImage.Format_BGR888)
-        self.image_label.setPixmap(QPixmap.fromImage(qt_image))
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    camera_system = CAMERA_HOT_PLUG()  # 初始化相机
-    window = CameraApp(camera_system)
-    window.show()
-    sys.exit(app.exec_())
+    read_config(config_file_path)
+    print(multi_device_sync_config.items())
+    serial_number_list = [device["serial_number"] for device in multi_device_sync_config.values()]
+    serial_number_list=[ 'CP1L44P0006E','CP1E54200056', 'CP1L44P0004Y']
+    camera_index_map = {device['config']['camera_name']: serial_number_list.index(device["serial_number"]) for device in multi_device_sync_config.values() if device["serial_number"] in serial_number_list}
+    print(camera_index_map)
