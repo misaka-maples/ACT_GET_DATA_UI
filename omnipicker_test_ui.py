@@ -1,6 +1,5 @@
 import serial
 import serial.tools.list_ports
-import time
 import struct
 import tkinter as tk
 from tkinter import ttk
@@ -13,7 +12,7 @@ set_can1 = b'\x49\x3B\x42\x57\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0
 # 开启 can0、1 通道
 start_can = b'\x49\x3B\x44\x57\x01\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x45\x2E'
 # 设置 can0 参数
-set_can0 = b'\x49\x3B\x42\x57\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x45\x2E'
+set_can0 = b'\x49\x3B\x42\x57\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x45\x2E'
 
 
 
@@ -91,10 +90,16 @@ class CANApp:
 
         self.refresh_button = tk.Button(self.port_frame, text="刷新", command=self.refresh_ports, font=("Arial", 18), height=2)
         self.refresh_button.pack(side=tk.RIGHT, padx=20)
-
+        
         # 串口操作按钮
         self.open_button = tk.Button(self.main_frame, text="打开串口", command=self.open_serial_port, font=("Arial", 18), height=2)
         self.open_button.pack(fill=tk.X, pady=20)
+
+        # 创建 Combobox，并添加选项
+        self.can_combobox = ttk.Combobox(self.main_frame, state="readonly", values=["can0", "can1"],font=("Arial", 18), height=10)
+        self.can_combobox.pack(fill=tk.X, pady=20)
+        # 设置默认值（可选）
+        self.can_combobox.current(0)  # 默认选择第一个选项
 
         # 滑动条
         self.slider = tk.Scale(self.main_frame, from_=0, to=1, orient="horizontal", resolution=0.01, label="调节 CAN 数据",
@@ -117,7 +122,7 @@ class CANApp:
         self.main_frame.pack(fill=tk.BOTH, expand=True)
 
         
-    def center_window(self, width=1280, height=800):
+    def center_window(self, width=1280, height=900):
         """让窗口居中"""
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
@@ -125,14 +130,18 @@ class CANApp:
         y = (screen_height - height) // 2
         self.root.geometry(f"{width}x{height}+{x}+{y}")
     def refresh_ports(self):
-        ports = [port.device for port in serial.tools.list_ports.comports()]
-        
-        # 将 ACM* 设备优先排序
-        ports.sort(key=lambda x: (not x.startswith("/dev/ttyACM"), x))
+        # 获取包含 "ACM" 的串口
+        ports = [port.device for port in serial.tools.list_ports.comports() if "ACM" in port.device]
 
+        # 更新 Combobox 选项
         self.port_combobox["values"] = ports
+
+        # 如果有可用的串口，则默认选中第一个
         if ports:
-            self.port_combobox.current(0)  # 默认选择第一个
+            self.port_combobox.current(0)
+        else:
+            self.port_combobox['values'] = [port.device for port in serial.tools.list_ports.comports()]
+            self.port_combobox.current(0)
     def open_serial_port(self):
         """打开串口"""
         selected_port = self.port_combobox.get()
@@ -160,23 +169,31 @@ class CANApp:
         if self.ser and self.is_sending:
             if not self.is_configured:
                 send_data(self.ser, set_can0)
-                time.sleep(0.1)
+                # time.sleep(0.1)
                 read_data(self.ser)
                 send_data(self.ser, set_can1)
-                time.sleep(0.1)
+                # time.sleep(0.1)
                 read_data(self.ser)
                 send_data(self.ser, start_can)
-                time.sleep(0.1)
+                # time.sleep(0.1)
                 read_data(self.ser)
                 self.is_configured = True
-
+            selected_value = self.can_combobox.get()
+            if selected_value == "can0":
+                # 发送 can0 数据
+                can_data = self.calculate_can_data(self.slider.get())
+                self.send_can_message(self.ser, 0x001, can_data, 0x00)
+            if selected_value == "can1":
+                # 发送 can1 数据
+                can_data = self.calculate_can_data(self.slider.get())
+                self.send_can_message(self.ser, 0x001, can_data, 0x01)
             # 发送 CAN 数据
-            can_data = self.calculate_can_data(self.slider.get())
-            self.send_can_message(self.ser, 0x001, can_data, 0x01)  # 发送 CAN 数据
+            # can_data = self.calculate_can_data(self.slider.get())
+            # self.send_can_message(self.ser, 0x001, can_data, 0x01)  # 发送 CAN 数据
             read_data(self.ser)
 
             # 100ms 后继续发送
-            self.root.after(100, self.send_can_data)
+            self.root.after(50, self.send_can_data)
 
     def send_can_message(self, ser, can_id, data, channel):
         """
