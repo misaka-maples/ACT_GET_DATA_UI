@@ -18,6 +18,8 @@ from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtCore import QTimer,QThread, pyqtSignal, QMutex
 import threading
 
+
+
 frames_queue_lock = Lock()
 
 # Configuration settings
@@ -68,7 +70,6 @@ class GPCONTROL(QThread):
             elif self.state_flag == 2:
                 self.control_command = "OPEN_GRIPPER"
                 state = self.open_all_gp()
-            # print(state)
             # 3. 强制获取返回帧
             if state is not None:
                 feedback = state
@@ -140,7 +141,7 @@ class GPCONTROL(QThread):
         """读取串口返回数据并过滤符合头尾要求的数据"""
         ser = self.ser
         if ser and ser.is_open:
-            data = ser.read(32)  # 读取最大 64 字节
+            data = ser.read(64)  # 读取最大 64 字节
             if data:
                 valid_frames = self.filter_can_data(data)
                 if valid_frames:
@@ -152,7 +153,6 @@ class GPCONTROL(QThread):
                         else:
                             # print(f"接收符合条件的CAN数据: {frame.hex()}")
                             back_data=frame.hex()
-                    
                     return valid_frames, back_data
                 else:
                     pass
@@ -289,11 +289,14 @@ class ROBOT:
     def stop(self):
         self.Client.set_stop(self.robot_num)
         self.Client.set_reset(self.robot_num)
+    
         # self.rm_65_b_right_arm.rm_set_stop()
 
 class ACTION_PLAN(QThread):
     action_signal = pyqtSignal(object)
     complete_signal = pyqtSignal(object)
+    traja_reverse_signal = pyqtSignal(object)
+    close_signal = pyqtSignal(object)
     def __init__(self):
         super().__init__()
         self.running = True  # 线程运行状态
@@ -305,13 +308,14 @@ class ACTION_PLAN(QThread):
         self.local_desktop_point = None
         self.loop_len=1
         self.complete =False
-        self.random_pos=[]
-        self.points = [[-9.19068, -84.5064, 631.227, 1.42733, -0.0900914, 2.83647],
-                       [-57.3369, -416.376, 440.298, 2.15094, -0.0680498, 2.93592],
-                       [-81.1963, -580.862, 115.466, 2.73102, -0.00482064, 2.98929],
-                       [-103.907, -629.442, -42.2999, 2.50661, -0.00864752, 3.0262],
-                       [-122.547, -692.83, -111.033, 2.50651, -0.00858603, 3.02615],
-                       [-103.82, -689.963, -113.406, 2.5064, -0.00853207, 3.02624]
+        self.points = [
+                       [-66.5918, -480.683, 341.961, 2.36635, -0.0480989, 1.43767],
+                       [-134.102, -541.192, 2.5797, 2.36486, 0.0714842, 1.43293],
+                       [-134.101, -621.947, -92.2796, 2.36486, 0.0714367, 1.43288],
+                       [-136.973, -650.393, -139.331, 2.36498, 0.0716728, 1.43285],#第二版位置偏差
+                       [-126.401, -650.392, -139.349, 2.365, 0.0716743, 1.43292],
+                    #    [-140.889, -659.503, -128.084, 2.36486, 0.071603, 1.43288],第一版位置偏差
+                    #    [-126.402, -659.527, -128.062, 2.36474, 0.0714794, 1.43291],
                        ]  # 存储所有点位
     def val(self, start_point, local_desktop_point, *goal_points):
         self.start_point = start_point
@@ -329,10 +333,7 @@ class ACTION_PLAN(QThread):
             self.Robot.set_state(position_,'pose')
     def run(self):
         while self.running:
-            print("action_plan run")
-            # self.run_thread()
-            # print(self.points)
-            self.traja()
+            self.traja() 
             self.traja_reverse()
             if not self.running:
                 break
@@ -341,29 +342,33 @@ class ACTION_PLAN(QThread):
             raise ValueError("请先设置至少一个点位")
 
         self.complete_signal.emit(False)
-
-        for point in self.points:
+        for idx, point in enumerate(self.points):
             if self.is_close(self.Robot.get_state(model='pose'), point, tolerance=0.1):
                 continue
-            # if self.random_pos != []:
-                
-            #     self.move(self.random_pos)
-            #     self.random_pos = []
-            #     continue
-            # print(f"当前点位：{self.Robot.get_state(model='pose')}")
-            if point is not None :
-                self.move(point)
+            if point == self.points[3]:
+                self.close_signal.emit(True)
+            if point is not None:
+                # 判断是否是后三个点
+                if idx >= len(self.points) - 2:
+                    self.move(point)  # 直接移动到目标点
+                else:
+                    rand_point = self.random_positon(point)
+                    print(rand_point)
+                    self.move(rand_point)
+
             if not self.running:
                 self.stop()
+        time.sleep(1)
         # self.complete_signal.emit(True)
+        self.close_signal.emit(False)
         print("发送 action_plan 完成信号")
-        time.sleep(2)
+        # time.sleep(2)
 
     def traja_reverse(self):
         if not hasattr(self, "points") or not self.points:
             raise ValueError("请先设置至少一个点位")
 
-        self.complete_signal.emit(False)
+        self.traja_reverse_signal.emit(True)
 
         # 逆序遍历 `self.points`，让机器人按原轨迹返回
         for point in reversed(self.points):
@@ -373,7 +378,9 @@ class ACTION_PLAN(QThread):
                 self.move(point)
             if not self.running:
                 self.stop()
+        self.traja_reverse_signal.emit(False)
         self.complete_signal.emit(True)
+
         print("发送 action_plan 逆向完成信号")
         time.sleep(2)
 
@@ -393,15 +400,20 @@ class ACTION_PLAN(QThread):
         
         # 逐个元素比较误差
         for a, t in zip(actual, target):
+            # print(abs(a - t))
             if abs(a - t) > tolerance:
                 return False
         return True
 
-    def random_positon(self,point):
-        self.random_pos = point.copy()
-        self.random_pos[0] = random.uniform(1.5, 3.5)  # 生成 1.5 到 3.5 之间的随机浮点数
-        self.random_pos[2] = random.uniform(1.5, 3.5)  # 生成 1.5 到 3.5 之间的随机浮点
-
+    def random_positon(self,point,a=25,b=30):
+        random_pos = point.copy()
+        random_pos[0] += random.uniform(a,b)  # 生成 1.5 到 3.5 之间的随机浮点数
+        random_pos[1] += random.uniform(a,b)  # 生成 1.5 到 3.5 之间的随机浮点数
+        random_pos[2] += random.uniform(a,b)  # 生成 1.5 到 3.5 之间的随机浮点
+        # random_pos[3] += random.uniform(1.5, 3.5)  # 生成 1.5 到 3.5 之间的随机浮点数
+        # random_pos[4] += random.uniform(1.5, 3.5)  # 生成 1.5 到 3.5 之间的随机浮点数
+        # random_pos[5] += random.uniform(1.5, 3.5)  # 生成 1.5 到 3.5 之间的随机浮点
+        return random_pos
     def set_loop_len(self,value):
         self.loop_len=value
     def stop(self):
@@ -434,7 +446,7 @@ class GENERATOR_HDF5:
                             print(f"Saving image for {cam_name}, shape: {cam_data.shape}")  # 打印图片数据的尺寸
                             images_group.create_dataset(
                                 cam_name.split('/')[-1],
-                                data=cam_data,
+                               data=cam_data,
                                 dtype='uint8',
                             )
                         except Exception as e:
@@ -742,7 +754,7 @@ class CAMERA_HOT_PLUG:
         self.setup_cameras()
         self.start_streams()
         self.running_device = True
-
+        self.change_signal = False
         print("相机初始化完成")
         self.monitor_thread = threading.Thread(target=self.monitor_devices, daemon=True)
         self.monitor_thread.start()
@@ -752,13 +764,15 @@ class CAMERA_HOT_PLUG:
             time.sleep(2)
             new_device_list = self.ctx.query_devices()
             new_device_cnt = new_device_list.get_count()
-            if new_device_cnt != self.curr_device_cnt:
+            if  new_device_cnt!= self.curr_device_cnt:
                 print("设备变化检测到，重新初始化相机...")
+                self.change_signal = True
                 self.stop_streams()
                 self.device_list = new_device_list
                 self.curr_device_cnt = new_device_cnt
                 self.setup_cameras()
                 self.start_streams()
+                self.change_signal = False
     def stop(self):
         self.running_device=False
         self.monitor_thread.join()
@@ -894,7 +908,6 @@ class CAMERA_HOT_PLUG:
 class run_main_windows(QWidget):
     def __init__(self):
         super().__init__()
-        self.create_widget()
         self.robot=ROBOT(robot_num=1)
         self.camera=CAMERA_HOT_PLUG()
         self.gpcontrol = GPCONTROL()
@@ -904,6 +917,8 @@ class run_main_windows(QWidget):
         self.gpcontrol.error_signal.connect(self.handle_error_signal)
         self.action_plan.action_signal.connect(self.handle_action_signal)
         self.action_plan.complete_signal.connect(self.handle_complete_signal)
+        self.action_plan.traja_reverse_signal.connect(self.handle_traja_reverse_signal)
+        self.action_plan.close_signal.connect(self.handle_close_signal)
         self.stop_render=True
         self.image:dict[str,np.array]={}
         self.images_dict = {cam_name: [] for cam_name in camera_names}  # 用于存储每个相机的图片
@@ -915,11 +930,15 @@ class run_main_windows(QWidget):
         self.gpstate=[]
         self.max_episode_len=5000
         self.data_dict:dict[str,np.array]={}
-        self.index=0
-        self.start_index = 0
+        
+        self.start_index = 51
+        self.index=self.start_index
         self.index_length=50
         self.start_pos,self.local_desktop_pos,self.goal_pos=[-9.19798, -84.536, 631.215, 1.42741, -0.0901151, 2.83646],[-98.2562, -0.131311, 30.7511, 3.35265, -26.1317, 72.2164],[-99.3707, -82.4347, 65.0209, 8.46747, -53.2068, 69.0324]
         self.complete_sign = False
+        self.traja_reverse_signal = False
+        self.close_signal = False
+        self.create_widget()
 
     def create_widget(self):
         self.setWindowTitle("ACT GET DATA")
@@ -996,7 +1015,7 @@ class run_main_windows(QWidget):
 
         # 进度条部分
         self.episode_index_box = QLineEdit()
-        self.episode_index_box.setPlaceholderText("Set start episode_idx.., default: 0,10")
+        self.episode_index_box.setPlaceholderText(f"Set start episode_idx.., default: {self.start_index },{self.index_length}")
         layout.addWidget(QLabel("Index:"))
         layout.addWidget(self.episode_index_box)
 
@@ -1026,11 +1045,7 @@ class run_main_windows(QWidget):
         # 设置窗口的布局
         self.setLayout(layout)
         print("控件初始化完成")
-    # def resizeEvent(self, event):
-    #     """当窗口大小变化时，调整 QLabel 大小"""
-    #     new_width = self.width()
-    #     new_height = int(new_width * 0.7)  # 保持 16:9 比例
-    #     self.label.setFixedSize(new_width, new_height)
+
     def on_add_point_btn_click(self):
         point_count = self.combo_box.count() + 1  # 计算新点的索引
         self.combo_box.addItem(f"Point {point_count}")  # 添加新点
@@ -1081,6 +1096,7 @@ class run_main_windows(QWidget):
             self.progress_value = 0  # 复位进度
             self.task_timer.start(10)
             self.result_label.setText("task start")
+            time.sleep(1)
     def on_stop_task_btn_click(self):
         self.robot.stop()
         self.task_timer.stop()
@@ -1095,35 +1111,42 @@ class run_main_windows(QWidget):
         self.action_plan.stop()
         pass
     def updata_collect_task(self):
-        self.progress_value += 1
-        # print(f"当前进度: {self.progress_value}")
-        self.progress_bar.setValue(self.progress_value)
-        # start = time.time()
+        # print(self.traja_reverse_signal)
+        # if not self.traja_reverse_signal:
+        if not False:
+            self.progress_value += 1
+            # print(f"当前进度: {self.progress_value}")
+            self.progress_bar.setValue(self.progress_value)
+            # start = time.time()
 
-        angle_qpos=self.robot.get_state()
-        # if self.robot.get_state('pose'):
-        #     self.robot.set_state(self.robot.get_state('pose'))
-        # print(time.time()-start)
-        radius_qpos = [math.radians(j) for j in angle_qpos]
-         # 处理 gpstate
-        if self.gpstate:
-            gpstate, gppos, gpforce = map(lambda x: str(x) if not isinstance(x, str) else x, self.gpstate)
-            radius_qpos.extend([int(gpstate, 16), int(gppos, 16), int(gpforce, 16)])
-        else:
-            raise "error in gpstate"
-        # 记录 qpos 数据
-        self.qpos_list.append(radius_qpos)
-        # 记录图像数据
-        if self.image:
-            for camera_name in camera_names:
-                self.images_dict[camera_name].append(self.image.get(camera_name))
-                
-        # 任务完成检查
+            angle_qpos=self.robot.get_state()
+            # if self.robot.get_state('pose'):
+            #     self.robot.set_state(self.robot.get_state('pose'))
+            # print(time.time()-start)
+            radius_qpos = [math.radians(j) for j in angle_qpos]
+            # 处理 gpstate
+            # print(self.gpstate)
+            if self.gpstate:
+                gpstate, gppos, gpforce = map(lambda x: str(x) if not isinstance(x, str) else x, self.gpstate)
+                radius_qpos.extend([int(gpstate, 16), int(gppos, 16), int(gpforce, 16)])
+            else:
+                raise ValueError("error in gpstate")
+            # 记录 qpos 数据
+            self.qpos_list.append(radius_qpos)
+            # 记录图像数据
+            if self.image:
+                for camera_name in camera_names:
+                    self.images_dict[camera_name].append(self.image.get(camera_name))
+            if self.close_signal:
+                pass
+                time.sleep(0.09)
+            else:
+                time.sleep(0.09)
+            # 任务完成检查
         if self.complete_sign:
             if self.index - self.start_index>= self.index_length :
                 print('task completed')
                 self.save_data()
-
                 self.action_plan.stop() 
                 self.task_timer.stop()
                 self.complete_sign=False
@@ -1132,17 +1155,24 @@ class run_main_windows(QWidget):
                 self.save_data()
                 self.complete_sign=False
                 print("completed data collection")
-        time.sleep(0.09)
+
+    
     def handle_feedback(self,feed_back):
         self.gpstate=feed_back
+        # print(self.gpstate)
+    def handle_traja_reverse_signal(self,traja_feed_back):
+        self.traja_reverse_signal = traja_feed_back
+        print(f"traja_reverse_signal :{traja_feed_back}")
     def handle_action_signal(self,action_feed_back):
         self.gpcontrol.set_state_flag(action_feed_back)
     def handle_complete_signal(self,complete_feed_back):
         self.complete_sign =complete_feed_back
-        print(f"接受complete_sign信号 :{complete_feed_back}")
+        print(f"complete_sign :{complete_feed_back}")
     def handle_error_signal(self,error_feed_back):
         print(error_feed_back)
         self.result_label.setText(error_feed_back)
+    def handle_close_signal(self,close_signal):
+        self.close_signal = close_signal
     def save_data(self):
         self.action_list = self.qpos_list
         self.max_episode_len=self.progress_value
@@ -1156,10 +1186,9 @@ class run_main_windows(QWidget):
             '/action': self.action_list[:self.max_episode_len],
         }
         # if 
-       
+        self.progress_value = 0  # 复位进度
         self.qpos_list.clear()
         self.action_list.clear()
-        self.progress_value = 0  # 复位进度
         for cam_name in camera_names:
             self.data_dict[f'/observations/images/{cam_name}'] = self.images_dict[cam_name][:self.max_episode_len]
             self.images_dict[cam_name].clear()
@@ -1187,7 +1216,12 @@ class run_main_windows(QWidget):
     def updata_frame(self):
         """更新摄像头图像"""
         global multi_device_sync_config
-        frame_data, color_width, color_height = self.camera.rendering_frame()
+        if self.camera.change_signal:
+            self.camera = CAMERA_HOT_PLUG()
+            frame_data, color_width, color_height = self.camera.rendering_frame()
+
+        else:
+            frame_data, color_width, color_height = self.camera.rendering_frame()
         # print(color_height,color_width)
         serial_number_list = self.camera.serial_number_list
         camera_index_map = {device['config']['camera_name']: serial_number_list.index(device["serial_number"]) for device in multi_device_sync_config.values() if device["serial_number"] in serial_number_list}

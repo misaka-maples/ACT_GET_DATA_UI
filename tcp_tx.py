@@ -24,6 +24,7 @@ class PersistentClient:
         self.vel = 100  #速度
         self.acc = 100  #加速度
         self.dcc = 100  #减速度
+        self.velocity = 60
         # self._receive_thread = threading.Thread(target=self._receive_data, daemon=True)
         # self._receive_thread.start()  # 启动接收线程  
           
@@ -115,7 +116,9 @@ class PersistentClient:
             self.sock.close()
             self.connected = False
             print("[INFO] 连接已关闭")
-
+    def set_speed(self,robotnum):
+        message = f"speed,{robotnum},{self.velocity}"
+        self.send_message(message)
     def set_open(self,robotnum):
         message = f"open,{robotnum}"
         self.send_message(message)
@@ -134,6 +137,27 @@ class PersistentClient:
     def set_reset(self,robotnum):
         message = f"reset,{robotnum}"
         self.send_message(message)
+    def is_close(self,actual,target,tolerance=1):
+        """
+        判断两个列表的每个元素是否在允许误差范围内
+        :param actual: 实际值列表（如当前机械臂状态）
+        :param target: 目标值列表
+        :param tolerance: 允许的最大误差（绝对值）
+        :return: 所有元素均满足误差要求返回True，否则False
+        """
+        # 处理None和长度检查
+        if actual is None or target is None:
+            return False
+        if len(actual) != len(target):
+            return False
+        
+        # 逐个元素比较误差
+        for a, t in zip(actual, target):
+            # print(actual, target, abs(a - t))
+            if abs(a - t) > tolerance:
+                return False
+        return True
+
     def set_arm_position(self, value:list, model:str,robotnum:str, timeout=5):
         """
         设置机械臂位置（关节模式或位姿模式），阻塞直到收到完成信号
@@ -151,7 +175,10 @@ class PersistentClient:
         if model not in ["joint", "pose"]:
             print("[ERROR] 模式参数必须是 'joint' 或 'pose'")
             return False
-
+        # print("进入近似点判断")
+        if self.is_close(self.get_arm_position_pose(robotnum),value):
+            print('[INFO] 当前位置与目标位置相等')
+            return False
         try:
             # 构造命令字符串
             value_str = ",".join(f"{x:.4f}" for x in value)
@@ -167,15 +194,13 @@ class PersistentClient:
             while True:
                 # 读取接收数据（假设有非阻塞读取方法）
                 data = self._receive_data(robotnum)
-
-                time.sleep(0.01)
-                print(f'wating data')
+                # print(f"接收数据:{data}")
+                # time.sleep(0.01)
+                # print(f'wating data')
                 if "readyToNext" in data:  # 根据实际的返回数据格式修改
                     
-                    print(f"data:{data}")
+                    # print(f"data:{data}")
                     break
-
-
         except Exception as e:
             print(f"[ERROR] 设置位置失败: {e}")
             return False
@@ -194,7 +219,7 @@ class PersistentClient:
                 # print("发送数据成功")
                 # response = self.recive_data
                 response = self._receive_data(robotnum)
-                # print("接收到的数据：", response)
+                # print("get_arm_position_joint接收到的数据：", response)
                 if response == None:
                     print("[ERROR] get超时，继续等待数据...")
                     continue
@@ -242,6 +267,7 @@ class PersistentClient:
 if __name__ == "__main__":
     client = PersistentClient('192.168.2.14', 8001)
     client.set_close(1)
+    time.sleep(0.5)
     client.set_clear(1)
     client.set_open(1)  
     while True:
@@ -264,8 +290,11 @@ if __name__ == "__main__":
                 print(deta)
             
             if message == "2":
+                # client.set_arm_position(  [-122.989, -692.846, -111.005, 2.50647, -0.00849161, 3.0262],"pose",1)
+                client.set_arm_position([-66.5918, -480.683, 341.961, 2.36635, -0.0480989, 1.43767],"pose",1)
                 # client.set_arm_position( [-81.1963, -580.862, 115.466, 2.73102, -0.00482064, 2.98929],"pose",1)
-                client.set_arm_position([-9.19798, -84.536, 631.215, 1.42741, -0.0901151, 2.83646],"pose",1)
+                # client.set_arm_position( [-103.907, -629.442, -42.2999, 2.50661, -0.00864752, 3.0262],"pose",1)
+
             if message == "3":
                 i=1
                 while i <=10:
@@ -276,15 +305,20 @@ if __name__ == "__main__":
                     time.sleep(0.1)
                     i += 1
     
-    
             if message == "4":
-                deta = client.set_arm_position([50.5687,-42.0996,43.3454,2.36686,-42.1309,50.4586], "joint", 2)
+                client.set_close(2)
+                time.sleep(0.1)
+
+                client.set_clear(2)
+                client.set_open(2) 
+                deta = client.set_arm_position([-39.273, 737.31, -82.4644, -2.49483, 0.484904, -1.61246], "pose", 2)
             if message == "5":
                 deta = client.send_message("stop,1")
             if message == "6":
                 deta = client.send_message("open,1")
     
-    
+            if message == "7":
+                deta = client.set_speed(1)
     
         except KeyboardInterrupt:
             print("\n[INFO] 终止客户端...")
