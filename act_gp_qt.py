@@ -28,12 +28,12 @@ MAX_QUEUE_SIZE = 2
 save_points_dir = os.path.join(os.getcwd(), "point_clouds")
 save_depth_image_dir = os.path.join(os.getcwd(), "depth_images")
 save_color_image_dir = os.path.join(os.getcwd(), "color_images")
-
+action_play:bool = False
 # Load config file for multiple devices
 config_file_path = os.path.join(os.path.dirname(__file__), "../config/multi_device_sync_config.json")
 multi_device_sync_config = {}
 camera_names = ['left_wrist','top','right_wrist']
-
+save_signal = False
 class GPCONTROL(QThread):
     error_signal = pyqtSignal(object)
     gp_control_state_signal = pyqtSignal(object)  # 反馈信号，用于 UI 连接
@@ -48,6 +48,7 @@ class GPCONTROL(QThread):
         self.max_data = b'\x00\xFF\xFF\xFF\xFF\xFF\x00\x00'
         self.ser = self.open_serial()
         self.is_sending = False
+        self.task_complete = False
         self.is_configured = False  # 配置标志位
         set_can1 = b'\x49\x3B\x42\x57\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x45\x2E'
         start_can1 = b'\x49\x3B\x44\x57\x01\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x45\x2E'
@@ -286,6 +287,11 @@ class ROBOT:
             self.Client.set_arm_position(action,'pose',self.robot_num)
         else:
             raise ValueError(f"model {model} is not support")
+    def enable_power(self):
+        self.Client.set_close(self.robot_num)
+        time.sleep(1)
+        self.Client.set_clear(self.robot_num)
+        self.Client.set_open(self.robot_num)
     def stop(self):
         self.Client.set_stop(self.robot_num)
         self.Client.set_reset(self.robot_num)
@@ -303,25 +309,28 @@ class ACTION_PLAN(QThread):
         self.Robot=ROBOT(robot_num=1)
         self.velocity = 15
         self.gpstate:list
-        self.start_point=None
+        self.point=None
         self.goal_point = None
         self.local_desktop_point = None
         self.loop_len=1
         self.complete =False
         self.points = [
-                       [-66.5918, -480.683, 341.961, 2.36635, -0.0480989, 1.43767],
-                       [-134.102, -541.192, 2.5797, 2.36486, 0.0714842, 1.43293],
-                       [-134.101, -621.947, -92.2796, 2.36486, 0.0714367, 1.43288],
-                       [-136.973, -650.393, -139.331, 2.36498, 0.0716728, 1.43285],#第二版位置偏差
-                       [-126.401, -650.392, -139.349, 2.365, 0.0716743, 1.43292],
-                    #    [-140.889, -659.503, -128.084, 2.36486, 0.071603, 1.43288],第一版位置偏差
-                    #    [-126.402, -659.527, -128.062, 2.36474, 0.0714794, 1.43291],
+                    #    [-66.5918, -480.683, 341.961, 2.36635, -0.0480989, 1.43767],#第一版
+                    #    [-134.102, -541.192, 2.5797, 2.36486, 0.0714842, 1.43293],
+                    #    [-143.225, -602.043, -69.8797, 2.34887, 0.0679714, 1.51996],
+                    #    [-143.773, -654.774, -133.036, 2.34891, 0.0677073, 1.52],
+                    #    [-122.714, -653.022, -132.788, 2.34881, 0.0675977, 1.52006],
+                       [-66.5918, -480.683, 341.961, 2.36635, -0.0480989, 1.43767],#第二版
+                       [-95.0238, -588.402, 124.545, 2.35329, -0.0531227, 1.43677],
+                       [-109.613, -579.638, -56.7167, 1.94239, -0.225811, 1.37319],
+                       [-139.921, -544.635, -183.422, 1.97974, 0.0461738, 1.43546],
+                       [-137.118, -601.257, -208.017, 1.98002, 0.0460499, 1.4354],
+                       [-121.42, -599.741, -209.687, 1.98009, 0.0459801, 1.43546], 
+                  
                        ]  # 存储所有点位
-    def val(self, start_point, local_desktop_point, *goal_points):
-        self.start_point = start_point
-        self.local_desktop_point = local_desktop_point
-        self.goal_points = list(goal_points)  # 将所有目标点存入列表
-
+    def val(self, point):
+        self.point = point
+  
     def move(self,position,up=False):
         if up is False:
             # self.Robot.rm_65_b_right_arm.rm_movej_p(position,self.velocity,0,0,1)
@@ -332,17 +341,25 @@ class ACTION_PLAN(QThread):
             # self.Robot.rm_65_b_right_arm.rm_movej_p(position_,self.velocity,0,0,1)
             self.Robot.set_state(position_,'pose')
     def run(self):
+        global action_play
         while self.running:
-            self.traja() 
-            self.traja_reverse()
-            if not self.running:
-                break
+            # print(action_play)
+            if action_play :
+                self.move(self.point)
+                # action_play = False
+            else:
+                if save_signal == False:
+                    self.traja() 
+                    self.traja_reverse()
+                if not self.running:
+                    break
     def traja(self):
         if not hasattr(self, "points") or not self.points:
             raise ValueError("请先设置至少一个点位")
 
         self.complete_signal.emit(False)
         for idx, point in enumerate(self.points):
+            
             if self.is_close(self.Robot.get_state(model='pose'), point, tolerance=0.1):
                 continue
             if point == self.points[3]:
@@ -350,7 +367,7 @@ class ACTION_PLAN(QThread):
             if point is not None:
                 # 判断是否是后三个点
                 if idx >= len(self.points) - 2:
-                    self.move(point)  # 直接移动到目标点
+                    self.move(point)  
                 else:
                     rand_point = self.random_positon(point)
                     print(rand_point)
@@ -371,9 +388,10 @@ class ACTION_PLAN(QThread):
         self.traja_reverse_signal.emit(True)
 
         # 逆序遍历 `self.points`，让机器人按原轨迹返回
-        for point in reversed(self.points):
+        for idx, point in enumerate(reversed(self.points)):
             if self.is_close(self.Robot.get_state(model='pose'), point, tolerance=0.1):
                 continue
+            
             if point is not None:
                 self.move(point)
             if not self.running:
@@ -422,7 +440,7 @@ class ACTION_PLAN(QThread):
         
         # self.Robot.rm_65_b_right_arm.rm_set_delete_current_trajectory()
         self.quit()
-        self.wait()
+        # self.wait()
 
 class GENERATOR_HDF5:
     def __init__(self):
@@ -929,15 +947,16 @@ class run_main_windows(QWidget):
         self.gpforce_list=[]
         self.gpstate=[]
         self.max_episode_len=5000
-        self.data_dict:dict[str,np.array]={}
-        
-        self.start_index = 51
+
+        self.start_index = 0    
         self.index=self.start_index
-        self.index_length=50
+        self.task_complete_step = 0
+        self.end_index=50
         self.start_pos,self.local_desktop_pos,self.goal_pos=[-9.19798, -84.536, 631.215, 1.42741, -0.0901151, 2.83646],[-98.2562, -0.131311, 30.7511, 3.35265, -26.1317, 72.2164],[-99.3707, -82.4347, 65.0209, 8.46747, -53.2068, 69.0324]
         self.complete_sign = False
         self.traja_reverse_signal = False
         self.close_signal = False
+        self.save_signal = False
         self.create_widget()
 
     def create_widget(self):
@@ -946,7 +965,7 @@ class run_main_windows(QWidget):
         size = screen.geometry()  # 获取屏幕几何信息
         screen_width = size.width()
         screen_height = size.height()
-        window_width = 3840
+        window_width = 1920
         window_height = 1080
 
         # 创建定时器
@@ -972,21 +991,20 @@ class run_main_windows(QWidget):
         form_layout = QFormLayout()
         # combo_box_layout = QHBoxLayout()
 
-        self.combo_box = QComboBox()
-        self.combo_box.addItems(["Point 1", "Point 2", "Point 3"])  # 添加选项
-        form_layout.addRow("Select:", self.combo_box)
+        # self.combo_box = QComboBox()
+        # self.combo_box.addItems(["Point 1", "Point 2", "Point 3"])  # 添加选项
+        # form_layout.addRow("Select:", self.combo_box)
 
         self.input_box = QLineEdit()
         self.input_box.setPlaceholderText("Input position")
         form_layout.addRow("Data:", self.input_box)
-
         layout.addLayout(form_layout)
 
         # 设置按钮
         button_layout = QHBoxLayout()
-        self.add_point_btn = QPushButton("Add Point", self)
-        self.add_point_btn.clicked.connect(self.on_add_point_btn_click)
-        button_layout.addWidget(self.add_point_btn)
+        # self.add_point_btn = QPushButton("Add Point", self)
+        # self.add_point_btn.clicked.connect(self.on_add_point_btn_click)
+        # button_layout.addWidget(self.add_point_btn)
         self.setting_btn = QPushButton("Set Point", self)
         self.setting_btn.clicked.connect(self.on_setting_btn_click)
         button_layout.addWidget(self.setting_btn)
@@ -1003,8 +1021,19 @@ class run_main_windows(QWidget):
         self.stop_button.clicked.connect(self.stop_camera)
         button_layout.addWidget(self.stop_button)
 
-        layout.addLayout(button_layout)
+        self.change_mode_btn = QPushButton("修改位置开关", self)
+        self.change_mode_btn.clicked.connect(self.on_push_change_mode_btn_click)
+        button_layout.addWidget(self.change_mode_btn)
 
+        self.enable_btn = QPushButton("使能", self)
+        self.enable_btn.clicked.connect(self.on_push_enable_btn_click)
+        button_layout.addWidget(self.enable_btn)
+        
+        self.enable_power_btn = QPushButton("上电", self)
+        self.enable_power_btn.clicked.connect(self.on_push_enable_power_btn_click)
+        button_layout.addWidget(self.enable_power_btn)
+
+        layout.addLayout(button_layout)
         # Task-related buttons
         self.start_task = QPushButton("Start Task", self)
         self.start_task.clicked.connect(self.on_start_task_btn_click)
@@ -1015,7 +1044,7 @@ class run_main_windows(QWidget):
 
         # 进度条部分
         self.episode_index_box = QLineEdit()
-        self.episode_index_box.setPlaceholderText(f"Set start episode_idx.., default: {self.start_index },{self.index_length}")
+        self.episode_index_box.setPlaceholderText(f"Set start episode_idx.., default: {self.start_index },{self.end_index}")
         layout.addWidget(QLabel("Index:"))
         layout.addWidget(self.episode_index_box)
 
@@ -1035,28 +1064,33 @@ class run_main_windows(QWidget):
         self.progress_bar.setRange(0, 500)
         layout.addWidget(self.progress_bar)
 
-        self.start_button = QPushButton("开始采集", self)
-        self.start_button.clicked.connect(self.start_collect)
-        button_layout.addWidget(self.start_button)
 
-        self.start_button = QPushButton("停止采集", self)
-        self.start_button.clicked.connect(self.stop_collect)
-        button_layout.addWidget(self.start_button)
         # 设置窗口的布局
         self.setLayout(layout)
+
         print("控件初始化完成")
 
-    def on_add_point_btn_click(self):
-        point_count = self.combo_box.count() + 1  # 计算新点的索引
-        self.combo_box.addItem(f"Point {point_count}")  # 添加新点
-        print(f"添加新的点位: Point {point_count}")
+    # def on_add_point_btn_click(self):
+    #     point_count = self.combo_box.count() + 1  # 计算新点的索引
+    #     self.combo_box.addItem(f"Point {point_count}")  # 添加新点
+    #     print(f"添加新的点位: Point {point_count}")
+    def on_push_change_mode_btn_click(self):
+        global action_play
+        if action_play == False:
+            action_play = True
+            self.change_mode_btn.setText("action_play:True")  # 直接修改文本
+        else:
+            action_play = False
+            self.change_mode_btn.setText("action_play:False")
+        print(action_play)
+    def on_push_enable_power_btn_click(self):
+        self.robot.enable_power()
+    def on_push_enable_btn_click(self):
+        self.action_plan.start()
     def on_setting_btn_click(self):
-        # 获取输入的点位索引（例如 "Point 1", "Point 2"）
-        selected_index = self.combo_box.currentIndex()
-
+        # global action_play
         # 读取 QLineEdit 输入的点位数据
         input_text = self.input_box.text().strip()
-
         try:
             # 将输入文本转换为列表，例如 "[1.0, 2.0, 3.0]"
             position = eval(input_text)  # 直接解析为 Python 列表
@@ -1065,20 +1099,10 @@ class run_main_windows(QWidget):
         except:
             QMessageBox.warning(self, "输入错误", "请输入正确的坐标格式，如：[1.0, 2.0, 3.0]")
             return
-
-        # 存储到 points 列表
-        if not hasattr(self.action_plan, "points"):
-            self.action_plan.points = []
-
-        # 如果索引超出当前列表长度，填充空位
-        while len(self.action_plan.points) <= selected_index:
-            self.action_plan.points.append(None)
-
-        self.action_plan.points[selected_index] = position  # 更新指定索引的点位
-
-        print(f"Point {selected_index + 1} 位置已设置: {position}")
-
-
+        
+        self.action_plan.point = position  # 更新指定索引的点位
+        print(position)
+        # action_play = True
     def on_get_robot_state_btn_click(self):
         self.pose = self.robot.get_state('pose')
         self.input_box.setText(json.dumps(self.pose))
@@ -1092,6 +1116,9 @@ class run_main_windows(QWidget):
         else:
             # self.action_plan.val(self.start_pos,self.goal_pos,self.local_desktop_pos)
             self.gpcontrol.start()
+            # if self.action_plan.running:
+            #     print("Task already running")
+            # else:
             self.action_plan.start()
             self.progress_value = 0  # 复位进度
             self.task_timer.start(10)
@@ -1109,7 +1136,6 @@ class run_main_windows(QWidget):
         self.camera_timer.stop()
         self.gpcontrol.stop()
         self.action_plan.stop()
-        pass
     def updata_collect_task(self):
         # print(self.traja_reverse_signal)
         # if not self.traja_reverse_signal:
@@ -1137,26 +1163,28 @@ class run_main_windows(QWidget):
             if self.image:
                 for camera_name in camera_names:
                     self.images_dict[camera_name].append(self.image.get(camera_name))
+                
             if self.close_signal:
                 pass
                 time.sleep(0.09)
             else:
                 time.sleep(0.09)
+            if self.traja_reverse_signal is True and self.task_complete_step == 0:
+                self.task_complete_step = self.progress_value
             # 任务完成检查
         if self.complete_sign:
-            if self.index - self.start_index>= self.index_length :
+            print(self.index - self.start_index)
+            if self.index >= self.end_index :
                 print('task completed')
                 self.save_data()
                 self.action_plan.stop() 
                 self.task_timer.stop()
                 self.complete_sign=False
-
             else:
                 self.save_data()
                 self.complete_sign=False
                 print("completed data collection")
 
-    
     def handle_feedback(self,feed_back):
         self.gpstate=feed_back
         # print(self.gpstate)
@@ -1174,6 +1202,10 @@ class run_main_windows(QWidget):
     def handle_close_signal(self,close_signal):
         self.close_signal = close_signal
     def save_data(self):
+        global save_signal
+        data_dict:dict[str,np.array]={}
+        data_dict_add:dict[str,np.array]={}
+        save_signal = True
         self.action_list = self.qpos_list
         self.max_episode_len=self.progress_value
         if self.qpos_list is not None:
@@ -1181,21 +1213,54 @@ class run_main_windows(QWidget):
             self.qpos_array = np.vstack([self.qpos_list[0], self.qpos_list])  # 存入一个新变量
         else:
             raise "qpos is none"
-        self.data_dict = {
+        data_dict = {
             '/observations/qpos': self.qpos_array[:self.max_episode_len],
             '/action': self.action_list[:self.max_episode_len],
         }
-        # if 
+        
+        data_dict_add = {
+            '/observations/qpos': self.qpos_array[:self.max_episode_len],
+            '/action': self.action_list[:self.max_episode_len],
+        }
+        
         self.progress_value = 0  # 复位进度
         self.qpos_list.clear()
         self.action_list.clear()
         for cam_name in camera_names:
-            self.data_dict[f'/observations/images/{cam_name}'] = self.images_dict[cam_name][:self.max_episode_len]
-            self.images_dict[cam_name].clear()
-        self.generator_hdf5.save_hdf5(self.data_dict,"./hdf5_file",self.index)
+            data_dict[f'/observations/images/{cam_name}'] = self.images_dict[cam_name][:self.max_episode_len]
+        self.generator_hdf5.save_hdf5(data_dict,"./hdf5_file",self.index)
+        data_dict:dict[str,np.array]={}
+        if self.task_complete_step != 0:
+            for cam_name in camera_names:
+                images = self.images_dict[cam_name][:self.max_episode_len]
+                colored_images = []
+                square_size = 100
+
+                for i, img in enumerate(images):
+                    img_copy = [row[:] for row in img]  # 深拷贝，防止改到原图
+
+                    height = len(img_copy)
+                    width = len(img_copy[0])
+                    square_color = [0, 0, 255] if i < self.task_complete_step else [0, 255, 0]  # 蓝或绿（RGB）
+
+                    # 左下角：行范围 [height - square_size, height)
+                    for row in range(height - square_size, height):
+                        for col in range(square_size):
+                            if 0 <= row < height and 0 <= col < width:
+                                img_copy[row][col] = square_color
+
+                    colored_images.append(img_copy)
+                self.images_dict[cam_name] = colored_images
+                data_dict_add[f'/observations/images/{cam_name}'] = self.images_dict[cam_name][:self.max_episode_len]
+        self.images_dict[cam_name].clear()
+        self.generator_hdf5.save_hdf5(data_dict_add,"./hdf5_file_add",self.index)
+        self.task_complete_step = 0
+        data_dict_add:dict[str,np.array]={}
+
         self.index+=1
-        if self.index>self.index_length:
+        if self.index>self.end_index:
             self.result_label.setText(f"task over please restart or close")
+        save_signal = False
     def on_set_index_btn_click(self):
         index=self.episode_index_box.text()
         # print(index)
@@ -1203,8 +1268,7 @@ class run_main_windows(QWidget):
             self.result_label.setText(f"index error")
         else:
             index_len = list(map(int, index.split(',')))
-            self.index_length=index_len[1]
-            # print(self.index_length)
+            self.end_index=index_len[1]
             self.index=index_len[0]
             self.start_index =index_len[0]
 
@@ -1318,7 +1382,6 @@ class run_main_windows(QWidget):
         self.task_timer.stop()
         self.gpcontrol.close()
         self.gpcontrol.stop()
-
         event.accept()
 
 # if __name__ == '__main__':

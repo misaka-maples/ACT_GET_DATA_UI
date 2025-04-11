@@ -267,7 +267,7 @@ class PersistentClient:
 if __name__ == "__main__":
     client = PersistentClient('192.168.2.14', 8001)
     client.set_close(1)
-    time.sleep(0.5)
+    time.sleep(1)
     client.set_clear(1)
     client.set_open(1)  
     while True:
@@ -290,8 +290,8 @@ if __name__ == "__main__":
                 print(deta)
             
             if message == "2":
-                # client.set_arm_position(  [-122.989, -692.846, -111.005, 2.50647, -0.00849161, 3.0262],"pose",1)
                 client.set_arm_position([-66.5918, -480.683, 341.961, 2.36635, -0.0480989, 1.43767],"pose",1)
+                # client.set_arm_position([-135.806, -657.58, -132.078, 2.35454, 0.0848985, 1.51967],"pose",1)
                 # client.set_arm_position( [-81.1963, -580.862, 115.466, 2.73102, -0.00482064, 2.98929],"pose",1)
                 # client.set_arm_position( [-103.907, -629.442, -42.2999, 2.50661, -0.00864752, 3.0262],"pose",1)
 
