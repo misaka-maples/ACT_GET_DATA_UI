@@ -142,7 +142,8 @@ class GPCONTROL(QThread):
         """读取串口返回数据并过滤符合头尾要求的数据"""
         ser = self.ser
         if ser and ser.is_open:
-            data = ser.read(64)  # 读取最大 64 字节
+            if ser.in_waiting > 0:
+                data = ser.read(64)  # 读取最大 64 字节
             if data:
                 valid_frames = self.filter_can_data(data)
                 if valid_frames:
@@ -320,13 +321,18 @@ class ACTION_PLAN(QThread):
                     #    [-143.225, -602.043, -69.8797, 2.34887, 0.0679714, 1.51996],
                     #    [-143.773, -654.774, -133.036, 2.34891, 0.0677073, 1.52],
                     #    [-122.714, -653.022, -132.788, 2.34881, 0.0675977, 1.52006],
-                       [-66.5918, -480.683, 341.961, 2.36635, -0.0480989, 1.43767],#第二版
-                       [-95.0238, -588.402, 124.545, 2.35329, -0.0531227, 1.43677],
-                       [-109.613, -579.638, -56.7167, 1.94239, -0.225811, 1.37319],
-                       [-139.921, -544.635, -183.422, 1.97974, 0.0461738, 1.43546],
-                       [-137.118, -601.257, -208.017, 1.98002, 0.0460499, 1.4354],
-                       [-121.42, -599.741, -209.687, 1.98009, 0.0459801, 1.43546], 
-                  
+                    #    [-66.5918, -480.683, 341.961, 2.36635, -0.0480989, 1.43767],#第二版
+                    #    [-95.0238, -588.402, 124.545, 2.35329, -0.0531227, 1.43677],
+                    #    [-109.613, -579.638, -56.7167, 1.94239, -0.225811, 1.37319],
+                    #    [-139.921, -544.635, -183.422, 1.97974, 0.0461738, 1.43546],
+                    #    [-137.118, -601.257, -208.017, 1.98002, 0.0460499, 1.4354],
+                    #    [-121.42, -599.741, -209.687, 1.98009, 0.0459801, 1.43546], 
+                    [-127.182, -740.602, -84.8895, 2.09826, -0.0342467, 1.66033],#第三版
+                    [-122.838, -800.168, -196.384, 2.12972, 0.0466091, 1.43007],
+                    [-126.263, -801.374, -296.735, 2.12947, 0.0464736, 1.42999],
+                    [-110.854, -801.413, -296.686, 2.12938, 0.0463978, 1.43004],
+                    
+
                        ]  # 存储所有点位
     def val(self, point):
         self.point = point
@@ -445,7 +451,7 @@ class ACTION_PLAN(QThread):
 class GENERATOR_HDF5:
     def __init__(self):
         pass
-    def save_hdf5(self,data_dict,path_to_save_hdf5,episode_idx):
+    def save_hdf5(self,data_dict,path_to_save_hdf5,episode_idx,compressed=True):
         os.makedirs(path_to_save_hdf5, exist_ok=True)
         self.dataset_path = os.path.join(path_to_save_hdf5, f'episode_{episode_idx}.hdf5')
 
@@ -464,8 +470,10 @@ class GENERATOR_HDF5:
                             print(f"Saving image for {cam_name}, shape: {cam_data.shape}")  # 打印图片数据的尺寸
                             images_group.create_dataset(
                                 cam_name.split('/')[-1],
-                               data=cam_data,
+                                data=cam_data,
                                 dtype='uint8',
+                                compression="gzip", 
+                                compression_opts= 4 if compressed else 0
                             )
                         except Exception as e:
                             print(f"Error saving image data for camera {cam_name}: {e}")
@@ -1107,6 +1115,7 @@ class run_main_windows(QWidget):
         self.pose = self.robot.get_state('pose')
         self.input_box.setText(json.dumps(self.pose))
     def on_start_task_btn_click(self):
+        global action_play
         if self.action_plan.points is None:
             self.result_label.setText("points is None")
         # elif self.local_desktop_pos is None:
@@ -1116,10 +1125,11 @@ class run_main_windows(QWidget):
         else:
             # self.action_plan.val(self.start_pos,self.goal_pos,self.local_desktop_pos)
             self.gpcontrol.start()
-            # if self.action_plan.running:
-            #     print("Task already running")
-            # else:
-            self.action_plan.start()
+            if self.action_plan.isRunning():
+                print("Task already running")
+            else:
+                self.action_plan.start()
+            action_play = False
             self.progress_value = 0  # 复位进度
             self.task_timer.start(10)
             self.result_label.setText("task start")
@@ -1163,7 +1173,8 @@ class run_main_windows(QWidget):
             if self.image:
                 for camera_name in camera_names:
                     self.images_dict[camera_name].append(self.image.get(camera_name))
-                
+
+
             if self.close_signal:
                 pass
                 time.sleep(0.09)
@@ -1172,6 +1183,12 @@ class run_main_windows(QWidget):
             if self.traja_reverse_signal is True and self.task_complete_step == 0:
                 self.task_complete_step = self.progress_value
             # 任务完成检查
+        # if self.progress_value:
+            # if self.progress_value >= 100:
+            #     self.complete_sign = True
+            #     self.task_complete_step = self.progress_value/2
+            #     print(self.task_complete_step)
+            #     self.result_label.setText("task complete")
         if self.complete_sign:
             print(self.index - self.start_index)
             if self.index >= self.end_index :
@@ -1201,71 +1218,146 @@ class run_main_windows(QWidget):
         self.result_label.setText(error_feed_back)
     def handle_close_signal(self,close_signal):
         self.close_signal = close_signal
-    def save_data(self):
+    # def save_data(self):
 
+    #     try:
+    #         global save_signal
+    #         data_dict:dict[str,np.array]={}
+    #         data_dict_add:dict[str,np.array]={}
+    #         save_signal = True
+    #         self.action_list = self.qpos_list
+    #         self.max_episode_len=self.progress_value
+    #         if self.qpos_list is not None:
+    #             # self.qpos_list = np.vstack([self.qpos_list[0], self.qpos_list])
+    #             self.qpos_array = np.vstack([self.qpos_list[0], self.qpos_list])  # 存入一个新变量
+    #         else:
+    #             raise "qpos is none"
+    #         data_dict = {
+    #             '/observations/qpos': self.qpos_array[:self.max_episode_len],
+    #             '/action': self.action_list[:self.max_episode_len],
+    #         }
+            
+    #         data_dict_add = {
+    #             '/observations/qpos': self.qpos_array[:self.max_episode_len],
+    #             '/action': self.action_list[:self.max_episode_len],
+    #         }
+    #         self.progress_value = 0  # 复位进度
+    #         self.qpos_list.clear()
+    #         self.action_list.clear()
+    #         for cam_name in camera_names:
+    #             data_dict[f'/observations/images/{cam_name}'] = self.images_dict[cam_name][:self.max_episode_len]
+            
+    #         self.generator_hdf5.save_hdf5(data_dict,"./hdf5_file",self.index)
+    #         data_dict:dict[str,np.array]={}
+
+    #         if self.task_complete_step != 0:
+    #             for cam_name in camera_names:
+    #                 images = self.images_dict[cam_name][:self.max_episode_len]
+    #                 colored_images = []
+    #                 square_size = 100
+
+    #                 for i, img in enumerate(images):
+    #                     img_copy = [row[:] for row in img]  # 深拷贝，防止改到原图
+
+    #                     height = len(img_copy)
+    #                     width = len(img_copy[0])
+    #                     square_color = [0, 0, 255] if i < self.task_complete_step else [0, 255, 0]  # 蓝或绿（RGB）
+
+    #                     # 左下角：行范围 [height - square_size, height)
+    #                     for row in range(height - square_size, height):
+    #                         for col in range(square_size):
+    #                             if 0 <= row < height and 0 <= col < width:
+    #                                 img_copy[row][col] = square_color
+
+    #                     colored_images.append(img_copy)
+    #                 self.images_dict[cam_name] = colored_images
+    #                 data_dict_add[f'/observations/images/{cam_name}'] = self.images_dict[cam_name][:self.max_episode_len]
+    #                 self.images_dict[cam_name].clear()
+    #         self.generator_hdf5.save_hdf5(data_dict_add,"./hdf5_file_add",self.index)
+    #         self.task_complete_step = 0
+    #         data_dict_add:dict[str,np.array]={}
+
+    #         self.index+=1
+    #         if self.index>self.end_index:
+    #             self.result_label.setText(f"task over please restart or close")
+    #         save_signal = False
+    #     except Exception as e:
+    #         print(f"Save data error: {e}")
+    #         self.result_label.setText(f"保存出错：{str(e)}")
+    def save_data(self):
         try:
             global save_signal
-            data_dict:dict[str,np.array]={}
-            data_dict_add:dict[str,np.array]={}
             save_signal = True
+
+            data_dict = {}
+            data_dict_add = {}
             self.action_list = self.qpos_list
-            self.max_episode_len=self.progress_value
+            self.max_episode_len = self.progress_value
+
             if self.qpos_list is not None:
-                # self.qpos_list = np.vstack([self.qpos_list[0], self.qpos_list])
-                self.qpos_array = np.vstack([self.qpos_list[0], self.qpos_list])  # 存入一个新变量
+                self.qpos_array = np.vstack([self.qpos_list[0], self.qpos_list])  # 一次性拼接
             else:
-                raise "qpos is none"
+                raise ValueError("qpos_list is None")
+            self.action_array = np.array(self.action_list)
+            # 保存动作和关节状态
             data_dict = {
                 '/observations/qpos': self.qpos_array[:self.max_episode_len],
                 '/action': self.action_list[:self.max_episode_len],
             }
-            
-            data_dict_add = {
-                '/observations/qpos': self.qpos_array[:self.max_episode_len],
-                '/action': self.action_list[:self.max_episode_len],
-            }
-            
-            self.progress_value = 0  # 复位进度
+
+            # 保存图像
+            for cam_name in camera_names:
+                # 确保图像是np.array
+                images_np = np.stack(self.images_dict[cam_name][:self.max_episode_len], axis=0)  # (N, H, W, C)
+                data_dict[f'/observations/images/{cam_name}'] = images_np
+
+            # 保存主文件
+            self.generator_hdf5.save_hdf5(data_dict, "./hdf5_file", self.index)
+
+            # 清理原始数据
+            self.progress_value = 0
             self.qpos_list.clear()
             self.action_list.clear()
-            for cam_name in camera_names:
-                data_dict[f'/observations/images/{cam_name}'] = self.images_dict[cam_name][:self.max_episode_len]
-            self.generator_hdf5.save_hdf5(data_dict,"./hdf5_file",self.index)
-            data_dict:dict[str,np.array]={}
+
+            # 如果需要带有色块的图像版本（标注 task_complete_step）
             if self.task_complete_step != 0:
+                square_size = 100
+                square_color_pre = np.array([0, 0, 255], dtype=np.uint8)   # 蓝
+                square_color_post = np.array([0, 255, 0], dtype=np.uint8)  # 绿
+
                 for cam_name in camera_names:
-                    images = self.images_dict[cam_name][:self.max_episode_len]
-                    colored_images = []
-                    square_size = 100
+                    images = np.stack(self.images_dict[cam_name][:self.max_episode_len], axis=0)  # (N, H, W, C)
+                    height, width = images.shape[1:3]
 
-                    for i, img in enumerate(images):
-                        img_copy = [row[:] for row in img]  # 深拷贝，防止改到原图
+                    # 应用色块：直接修改图像像素
+                    for i in range(len(images)):
+                        color = square_color_pre if i < self.task_complete_step else square_color_post
+                        images[i, height - square_size:, :square_size] = color
 
-                        height = len(img_copy)
-                        width = len(img_copy[0])
-                        square_color = [0, 0, 255] if i < self.task_complete_step else [0, 255, 0]  # 蓝或绿（RGB）
+                    data_dict_add[f'/observations/images/{cam_name}'] = images
 
-                        # 左下角：行范围 [height - square_size, height)
-                        for row in range(height - square_size, height):
-                            for col in range(square_size):
-                                if 0 <= row < height and 0 <= col < width:
-                                    img_copy[row][col] = square_color
-
-                        colored_images.append(img_copy)
-                    self.images_dict[cam_name] = colored_images
-                    data_dict_add[f'/observations/images/{cam_name}'] = self.images_dict[cam_name][:self.max_episode_len]
+                    # 清理图像缓存
                     self.images_dict[cam_name].clear()
-            self.generator_hdf5.save_hdf5(data_dict_add,"./hdf5_file_add",self.index)
-            self.task_complete_step = 0
-            data_dict_add:dict[str,np.array]={}
 
-            self.index+=1
-            if self.index>self.end_index:
-                self.result_label.setText(f"task over please restart or close")
+            # 保存带标注图像的版本
+            if data_dict_add:
+                data_dict_add['/observations/qpos'] = self.qpos_array[:self.max_episode_len]
+                data_dict_add['/action'] = self.action_array[:self.max_episode_len]
+                self.generator_hdf5.save_hdf5(data_dict_add, "./hdf5_file_add", self.index)
+
+            # 更新索引和状态
+            self.task_complete_step = 0
+            self.index += 1
+
+            if self.index > self.end_index:
+                self.result_label.setText("task over please restart or close")
+
             save_signal = False
+
         except Exception as e:
             print(f"Save data error: {e}")
             self.result_label.setText(f"保存出错：{str(e)}")
+
     def on_set_index_btn_click(self):
         index=self.episode_index_box.text()
         # print(index)
@@ -1326,13 +1418,15 @@ class run_main_windows(QWidget):
                     result_image = img  # 第一个摄像头的图像
                 else:
                     result_image = np.hstack((result_image, img))  # 按水平方向拼接图像
+
         if result_image is not None:
             self.display_image(result_image)
+            # print(type(np.array(frame_data.get(str(serial_number_list[camera_index_map['top']]), None))))
             if self.task_timer.isActive():
                 # print(f"camera_index_map: {camera_index_map}")
                 for cam_name in camera_names:
                     # if cam_name == 'top':.
-                    self.image[cam_name]=frame_data.get(str(serial_number_list[camera_index_map[cam_name]]), None)
+                    self.image[cam_name]=np.array(frame_data.get(str(serial_number_list[camera_index_map[cam_name]]), None))
                     # elif cam_name == 'right_wrist':
                     #     self.image[cam_name]=frame_data.get(str(serial_number_list[camera_index_map[cam_name]]), None)
                     # elif cam_name == 'left_wrist':

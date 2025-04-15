@@ -286,15 +286,17 @@ if __name__ == "__main__":
                     print(joint_pose,pose)
                     time.sleep(0.1)
             if message == "1,2":
-                deta = client.get_arm_position_pose(2)#[191.699, -68.037, 585.006, 1.08749, 1.40397, 1.99036]
+                deta = client.get_arm_position_joint(2)#[191.699, -68.037, 585.006, 1.08749, 1.40397, 1.99036]
                 print(deta)
             
             if message == "2":
-                client.set_arm_position([-66.5918, -480.683, 341.961, 2.36635, -0.0480989, 1.43767],"pose",1)
+                client.set_arm_position( [-9.54279, -130.451, 1095.91, 0.102584, -0.0106383, 1.50631],"pose",1)
                 # client.set_arm_position([-135.806, -657.58, -132.078, 2.35454, 0.0848985, 1.51967],"pose",1)
                 # client.set_arm_position( [-81.1963, -580.862, 115.466, 2.73102, -0.00482064, 2.98929],"pose",1)
                 # client.set_arm_position( [-103.907, -629.442, -42.2999, 2.50661, -0.00864752, 3.0262],"pose",1)
-
+            if message == "2,2":
+                deta = client.set_arm_position([-9.54279, -130.451, 1095.91, 0.102584, -0.0106383, 1.50631],"pose",1)
+                print(deta)
             if message == "3":
                 i=1
                 while i <=10:
@@ -307,11 +309,10 @@ if __name__ == "__main__":
     
             if message == "4":
                 client.set_close(2)
-                time.sleep(0.1)
-
+                time.sleep(1)
                 client.set_clear(2)
                 client.set_open(2) 
-                deta = client.set_arm_position([-39.273, 737.31, -82.4644, -2.49483, 0.484904, -1.61246], "pose", 2)
+                deta = client.set_arm_position([99.9124, -76.62, 75.8574, -30.5756, -28.869, 24.2967], "joint", 2)
             if message == "5":
                 deta = client.send_message("stop,1")
             if message == "6":
