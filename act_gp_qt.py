@@ -37,49 +37,69 @@ save_signal = False
 class GPCONTROL(QThread):
     error_signal = pyqtSignal(object)
     gp_control_state_signal = pyqtSignal(object)  # 反馈信号，用于 UI 连接
-    def __init__(self, parent=None, DEFAULT_SERIAL_PORTS = ("/dev/ttyACM0","/dev/ttyACM1","/dev/ttyACM2") ):
+    def __init__(self,parent=None, DEFAULT_SERIAL_PORTS = ("/dev/ttyACM0","/dev/ttyACM1","/dev/ttyACM2")):
         super().__init__(parent)
         self.state_flag = 0  # 夹爪状态: 0=关, 1=半开, 2=开
         self.running = True  # 控制线程运行
         self.control_command = ""  # 当前控制命令
         self.DEFAULT_SERIAL_PORTS = DEFAULT_SERIAL_PORTS
         self.BAUD_RATE = 50000
+        self.id = 1
         self.min_data = b'\x00\x00\xFF\xFF\xFF\xFF\x00\x00'
         self.max_data = b'\x00\xFF\xFF\xFF\xFF\xFF\x00\x00'
         self.ser = self.open_serial()
         self.is_sending = False
+        self.state_data_1=0
+        self.state_data_2=0
         self.task_complete = False
         self.is_configured = False  # 配置标志位
         set_can1 = b'\x49\x3B\x42\x57\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x45\x2E'
-        start_can1 = b'\x49\x3B\x44\x57\x01\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x45\x2E'
+        start_can = b'\x49\x3B\x44\x57\x01\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x45\x2E'
+        set_can0 = b'\x49\x3B\x42\x57\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x45\x2E'
         self.send_data(set_can1)  # 发送配置指令
+        self.send_data(set_can0)
         self.read_data()
-        self.send_data(start_can1)  # 启动 CAN 通道
+        self.send_data(start_can)  # 启动 CAN 通道
         self.read_data()    
     def run(self):
         state =None
         while self.running:
             # print(f"control:{self.state_flag}")
             # 1. 根据当前的 `state_flag` 设定控制命令
-            if self.state_flag == 0:
-                self.control_command = "CLOSE_GRIPPER"
-                state = self.close_gp()
-                # print("start gp close gp command ")
-            elif self.state_flag == 1:
-                self.control_command = "HALF_OPEN_GRIPPER"
-                state = self.open_half_gp()
-            elif self.state_flag == 2:
-                self.control_command = "OPEN_GRIPPER"
-                state = self.open_all_gp()
+            # if self.state_flag == 0:
+            #     self.control_command = "CLOSE_GRIPPER"
+            #     state = self.close_gp()
+            #     # print("start gp close gp command ")
+            # elif self.state_flag == 1:
+            #     self.control_command = "HALF_OPEN_GRIPPER"
+            #     state = self.open_half_gp()
+            # elif self.state_flag == 2:
+            #     self.control_command = "OPEN_GRIPPER"
+            #     state = self.open_all_gp()
+            start_time = time.time()
+            # print("[INFO] Running gripper control loop...")
+            state_1 = self.set_gp_state(self.state_data_1,can_id=0)
+            # state_2 = state_1
+            state_2 = self.set_gp_state(self.state_data_2,can_id=1)
+            # print(f"state_1:{state_1},state_2:{state_2}")
             # 3. 强制获取返回帧
-            if state is not None:
-                feedback = state
-                self.gp_control_state_signal.emit(feedback)  # 发送反馈信号
+            if state_1 is not None and state_2 is not None:
+                feedback = [state_1,state_2]
+                if feedback == []:
+                    pass
+                else:
+                    # print(f"返回帧:{feedback}")
+                    self.gp_control_state_signal.emit(feedback)  # 发送反馈信号
             # 4. 以 50Hz 频率运行（20ms 间隔）
             # time.sleep(0.02)
-    def set_state_flag(self,value):
+            end_time = time.time()
+            # print(f"耗时:{(end_time - start_time)*1000:.2f} ms")
+    def set_state_flag(self,value,id):
         """修改 self.state_flag"""
-        self.state_flag = value
+        self.state_data_1 = value[0]
+        self.state_data_2 = value[1]
+        self.id = id
+        
     def stop(self):
         """
         退出线程
@@ -142,7 +162,7 @@ class GPCONTROL(QThread):
         """读取串口返回数据并过滤符合头尾要求的数据"""
         ser = self.ser
         if ser and ser.is_open:
-            data = ser.read(64)  # 读取最大 64 字节
+            data = ser.read(32)  # 读取最大 64 字节
             if data:
                 valid_frames = self.filter_can_data(data)
                 if valid_frames:
@@ -174,7 +194,7 @@ class GPCONTROL(QThread):
         data_length = len(data)
         if data_length > 64:
             data = data[:64]  # 限制数据长度为 64 字节
-
+        channel = channel & 0x01  # 确保 channel 只有1位
         frame_header = b'\x5A'  # 帧头
         frame_info_1 = (data_length | channel << 7).to_bytes(1, 'big')  # CAN通道0, DLC数据长度
         frame_info_2 = b'\x00'  # 发送类型: 正常发送, 标准帧, 数据帧, 不加速
@@ -215,7 +235,22 @@ class GPCONTROL(QThread):
                         _, gpdata = data
                 gpstate,gppos,gpforce = gpdata[16:18],gpdata[18:20],gpdata[22:24]
                 return [gpstate,gppos,gpforce]
+    def set_gp_state(self,value,can_id=1):
+        assert 0 <= value <= 255, "value must be between 0 and 255"
+        open_gp = b'\x00' + value.to_bytes(1, 'big') + b'\xFF\xFF\xFF\xFF\x00\x00'
         
+        while 1:
+            self.send_can_data(b'\x00\x00\x00\x01', open_gp, can_id)
+            data = self.read_data() 
+            if data is not None:
+                _, gpdata = data
+                while gpdata == 0:
+                    self.send_can_data(b'\x00\x00\x00\x01', open_gp, can_id)
+                    data = self.read_data()
+                    if data is not None:
+                        _, gpdata = data
+                gpstate,gppos,gpforce = gpdata[16:18],gpdata[18:20],gpdata[22:24]
+                return [gpstate,gppos,gpforce]
     def close_gp(self):
         close_gp = b'\x00\x00\xFF\xFF\xFF\xFF\x00\x00'
         while 1:
@@ -257,44 +292,44 @@ class GPCONTROL(QThread):
             self.ser.close()
 
 class ROBOT:
-    def __init__(self,robot_num=1):
+    def __init__(self):
         self.joint_state_right=None
-        self.robot_num=robot_num
-        if self.robot_num ==1:
-            self.Client = PersistentClient('192.168.2.14', 8001)
-        elif self.robot_num==2:
-            self.Client = PersistentClient('192.168.3.15', 8002)
+        self.Client = PersistentClient('192.168.2.14', 8001)
+        # self.Client = PersistentClient('192.168.2.14', 8001)
         # self.Client.set_close(robot_num)
         # self.Client.set_clear(robot_num)
         # self.Client.set_open(robot_num)
         # self.rm_65_b_right_arm = (RoboticArm(rm_thread_mode_e.RM_TRIPLE_MODE_E))
         # self.arm_ini = self.rm_65_b_right_arm.rm_create_robot_arm("192.168.1.18",8080, level=3)
 
-    def get_state(self, model='joint',):#pose
+    def get_state(self, model='joint',robot_num=1):#pose
         # self.joint_state_right = self.rm_65_b_right_arm.rm_get_current_arm_state()
         # return_action = self.joint_state_right[1][model]
         if model=='joint':
-            action=self.Client.get_arm_position_joint(robotnum=self.robot_num)
+            action=self.Client.get_arm_position_joint(robotnum=robot_num)
         elif model=='pose':
-            action = self.Client.get_arm_position_pose(robotnum=self.robot_num)
+            action = self.Client.get_arm_position_pose(robotnum=robot_num)
         
         return action
-    def set_state(self, action, model='joint'):
-        # self.rm_65_b_right_arm.rm_set_arm_position(action, model)
+    def set_state(self, action, model='joint',robot_num=1):
+
         if model=='joint':
-            self.Client.set_arm_position(action,'joint',self.robot_num)
+            self.Client.set_arm_position(action,'joint',robot_num)
         elif model=='pose':
-            self.Client.set_arm_position(action,'pose',self.robot_num)
+            self.Client.set_arm_position(action,'pose',robot_num)
         else:
             raise ValueError(f"model {model} is not support")
     def enable_power(self):
-        self.Client.set_close(self.robot_num)
+        self.Client.set_close(1)
+        self.Client.set_clear(1) 
+        self.Client.set_close(2)
+        self.Client.set_clear(2)
         time.sleep(1)
-        self.Client.set_clear(self.robot_num)
-        self.Client.set_open(self.robot_num)
-    def stop(self):
-        self.Client.set_stop(self.robot_num)
-        self.Client.set_reset(self.robot_num)
+        self.Client.set_open(2)
+        self.Client.set_open(1)
+    def stop(self,robot_num):
+        self.Client.set_stop(robot_num)
+        self.Client.set_reset(robot_num)
     
         # self.rm_65_b_right_arm.rm_set_stop()
 
@@ -306,7 +341,7 @@ class ACTION_PLAN(QThread):
     def __init__(self):
         super().__init__()
         self.running = True  # 线程运行状态
-        self.Robot=ROBOT(robot_num=1)
+        self.Robot=ROBOT()
         self.velocity = 15
         self.gpstate:list
         self.point=None
@@ -314,7 +349,18 @@ class ACTION_PLAN(QThread):
         self.local_desktop_point = None
         self.loop_len=1
         self.complete =False
-        self.points = [
+        self.task_name = 'exchange'
+        self.duikong_points = []
+        self.change_points_right = [
+                    [320.871, 8.02429, 569.908, -2.77289, 1.54682, -0.36409],   #右手                 
+                    [231.133, 157.494, 682.548, -1.14296, 1.00109, -1.89602],
+                    [-77.3069, 482.59, 523.98, -1.74372, -0.200726, -1.37602],
+                    [-105.948, 601.398, 173.911, -2.39015, -0.206311, -1.52225],
+                    [-118.023, 668.517, -105.539, -2.20681, -0.119449, -2.58369],
+                    [-122.974, 633.268, -171.206, -2.37881, -0.126129, -3.09906],
+        ]
+        self.right_complete_flag = False
+        self.change_points_left = [
                     #    [-66.5918, -480.683, 341.961, 2.36635, -0.0480989, 1.43767],#第一版
                     #    [-134.102, -541.192, 2.5797, 2.36486, 0.0714842, 1.43293],
                     #    [-143.225, -602.043, -69.8797, 2.34887, 0.0679714, 1.51996],
@@ -326,87 +372,148 @@ class ACTION_PLAN(QThread):
                     #    [-139.921, -544.635, -183.422, 1.97974, 0.0461738, 1.43546],
                     #    [-137.118, -601.257, -208.017, 1.98002, 0.0460499, 1.4354],
                     #    [-121.42, -599.741, -209.687, 1.98009, 0.0459801, 1.43546], 
-                    [-127.182, -740.602, -84.8895, 2.09826, -0.0342467, 1.66033],#第三版
-                    [-122.838, -800.168, -196.384, 2.12972, 0.0466091, 1.43007],
-                    [-126.263, -801.374, -296.735, 2.12947, 0.0464736, 1.42999],
-                    [-110.854, -801.413, -296.686, 2.12938, 0.0463978, 1.43004],
-                    
+                    # [-127.182, -740.602, -84.8895, 2.09826, -0.0342467, 1.66033],#第三版
+                    # [-122.838, -800.168, -196.384, 2.12972, 0.0466091, 1.43007],
+                    # [-126.263, -801.374, -296.735, 2.12947, 0.0464736, 1.42999],
+                    # [-110.854, -801.413, -296.686, 2.12938, 0.0463978, 1.43004],
 
+
+
+                    # [320.871, 8.02429, 569.908, -2.77289, 1.54682, -0.36409],   #右手                 
+                    # [231.133, 157.494, 682.548, -1.14296, 1.00109, -1.89602],
+                    # [-77.3069, 482.59, 523.98, -1.74372, -0.200726, -1.37602],
+                    # [-105.948, 601.398, 173.911, -2.39015, -0.206311, -1.52225],
+                    # [-118.023, 668.517, -105.539, -2.20681, -0.119449, -2.58369],
+                    # [-122.974, 633.268, -171.206, -2.37881, -0.126129, -3.09906],
+
+
+                    [-127.243, -584.915, -238.195, 2.83726, -0.121101, 0.283056],#左手，先开爪
+                    [-122.727, -575.222, -306.648, 2.51579, -0.107995, 0.084948],
+                    [-133.111, -603.627, -349.451, 2.41829, 0.0258569, 0.0772928],#关闭左，开右夹爪
+                    [-126.106, -676.665, -177.715, 2.52124, -0.176581, 0.523211],
+                    [-124.602, -752.314, -212.362, 2.47183, -0.00238126, 1.49759],
+                    [-122.668, -810.366, -283.547, 2.47194, -0.00226187, 1.49765],
+                    [-103.843, -811.286, -284.241, 2.47199, -0.0021897, 1.49773],
+                    [-122.668, -810.366, -283.547, 2.47194, -0.00226187, 1.49765],
+                    [-112.935, -749.491, -200.365, 2.50606, 0.0133301, 1.49744],
+                    [-41.108, -734.451, 207.087, 2.28157, 0.145945, 1.33637],
+                    [519.871, -238.068, 700.523, 1.0436, 1.36405, 1.83762],
+                    [-41.108, -734.451, 207.087, 2.28157, 0.145945, 1.33637],
+                    [-127.243, -584.915, -238.195, 2.83726, -0.121101, 0.283056]
                        ]  # 存储所有点位
     def val(self, point):
         self.point = point
-  
-    def move(self,position,up=False):
+
+    def move(self,position,up=False,robot_num=1):
         if up is False:
             # self.Robot.rm_65_b_right_arm.rm_movej_p(position,self.velocity,0,0,1)
-            self.Robot.set_state(position,'pose')
+            self.Robot.set_state(position,'pose',robot_num)
         else:
             position_=position.copy()
             position_[1]=position_[1]-0.1
             # self.Robot.rm_65_b_right_arm.rm_movej_p(position_,self.velocity,0,0,1)
-            self.Robot.set_state(position_,'pose')
+            self.Robot.set_state(position_,'pose',robot_num)
     def run(self):
         global action_play
         while self.running:
-            # print(action_play)
             if action_play :
-                self.move(self.point)
+                self.move(self.point,robot_num=1)
                 # action_play = False
             else:
                 if save_signal == False:
-                    self.traja() 
-                    self.traja_reverse()
+                    if self.task_name == 'exchange':
+                        # self.traja_reverse_task_move(self.change_points_left,robot_num=1)
+                        # self.traja_task_move(self.change_points_left[:3],robot_num=1)
+                        self.exchange_task()
+                        
+                    elif self.task_name == 'duikong':
+                        self.traja_task_move(self.duikong_points)
+                    # self.change_task_move()
+                    time.sleep(2)
                 if not self.running:
                     break
-    def traja(self):
-        if not hasattr(self, "points") or not self.points:
-            raise ValueError("请先设置至少一个点位")
+
+    def exchange_task(self):
+        
+        self.action_signal.emit([[128,0],0])
+        time.sleep(1)
+        self.complete_signal.emit(False)
+        self.traja_task_move(self.change_points_right,robot_num=2)
+        time.sleep(1)
+        self.traja_task_move(self.change_points_left[:3],robot_num=1)
+
+        time.sleep(1)
+        self.action_signal.emit([[0,128],0])
+        time.sleep(1)
+        self.traja_reverse_task_move(self.change_points_right,robot_num=2)
+        self.traja_task_move(self.change_points_left[3:7],robot_num=1)
+        time.sleep(2)
+        self.traja_task_move(self.change_points_left[7:11],robot_num=1)
+        self.action_signal.emit([[128,128],0])
+        time.sleep(1)
+        self.traja_task_move(self.change_points_left[11:],robot_num=1)
+        self.complete_signal.emit(True)
+        
+    def traja_task_move(self,points,robot_num):
+        # if not hasattr(self, "points") or not self.points:
+        #     raise ValueError("请先设置至少一个点位")
 
         self.complete_signal.emit(False)
-        for idx, point in enumerate(self.points):
+        for idx, point in enumerate(points):
             
             if self.is_close(self.Robot.get_state(model='pose'), point, tolerance=0.1):
                 continue
-            if point == self.points[3]:
-                self.close_signal.emit(True)
+            # if point == self.points[3]:
+            #     self.close_signal.emit(True)
+            # print("运行")
             if point is not None:
                 # 判断是否是后三个点
-                if idx >= len(self.points) - 2:
-                    self.move(point)  
+                if idx >= len(points) - 2:
+                    self.move(point,robot_num=robot_num)  
                 else:
                     rand_point = self.random_positon(point)
-                    print(rand_point)
-                    self.move(rand_point)
+                    # print(rand_point)
+                    self.move(point,robot_num=robot_num)
 
             if not self.running:
                 self.stop()
         time.sleep(1)
         # self.complete_signal.emit(True)
-        self.close_signal.emit(False)
+        # self.close_signal.emit(False)
         print("发送 action_plan 完成信号")
         # time.sleep(2)
 
-    def traja_reverse(self):
-        if not hasattr(self, "points") or not self.points:
-            raise ValueError("请先设置至少一个点位")
+    def traja_reverse_task_move(self,points,robot_num):
+        # if not hasattr(self, "points") or not self.points:
+        #     raise ValueError("请先设置至少一个点位")
 
-        self.traja_reverse_signal.emit(True)
+        # self.traja_reverse_signal.emit(True)
 
         # 逆序遍历 `self.points`，让机器人按原轨迹返回
-        for idx, point in enumerate(reversed(self.points)):
+        for idx, point in enumerate(reversed(points)):
             if self.is_close(self.Robot.get_state(model='pose'), point, tolerance=0.1):
                 continue
-            
+
             if point is not None:
-                self.move(point)
+                self.move(point,robot_num=robot_num)
             if not self.running:
                 self.stop()
-        self.traja_reverse_signal.emit(False)
-        self.complete_signal.emit(True)
+        # self.traja_reverse_signal.emit(False)
+        # self.complete_signal.emit(True)
 
         print("发送 action_plan 逆向完成信号")
         time.sleep(2)
+    def change_task_move(self):
+        self.complete_signal.emit(False)
+        time.sleep(2)
+        self.action_signal.emit([254,0])
+        time.sleep(2)
 
+        self.action_signal.emit([254,1])
+        time.sleep(2)
+        self.action_signal.emit([0,0])
+        time.sleep(2)
+        self.action_signal.emit([0,1])
     def is_close(self, actual, target, tolerance=0.1):
         """
         判断两个列表的每个元素是否在允许误差范围内
@@ -555,7 +662,8 @@ class GENERATOR_HDF5:
         except Exception as e:
             print(f"Error during saving hdf5 file: {e}")
         
-        print(f"Data saved to {self.dataset_path}")
+        print(f"\033[92mData saved to {self.dataset_path}\033[0m")
+
 class CAMERA():
     def __init__(self):
         ctx = Context()
@@ -933,7 +1041,7 @@ class CAMERA_HOT_PLUG:
 class run_main_windows(QWidget):
     def __init__(self):
         super().__init__()
-        self.robot=ROBOT(robot_num=1)
+        self.robot=ROBOT()
         self.camera=CAMERA_HOT_PLUG()
         self.gpcontrol = GPCONTROL()
         self.generator_hdf5=GENERATOR_HDF5()
@@ -1112,29 +1220,31 @@ class run_main_windows(QWidget):
         # action_play = True
     def on_get_robot_state_btn_click(self):
         self.pose = self.robot.get_state('pose')
+        print(self.pose)
         self.input_box.setText(json.dumps(self.pose))
     def on_start_task_btn_click(self):
         global action_play
-        if self.action_plan.points is None:
-            self.result_label.setText("points is None")
+        # if self.action_plan.points is None:
+        #     self.result_label.setText("points is None")
         # elif self.local_desktop_pos is None:
         #     self.result_label.setText("local_desktop_pos is None")
         # elif self.goal_pos is None:
         #     self.result_label.setText("goal_pos is None")
-        else:
+        # else:
             # self.action_plan.val(self.start_pos,self.goal_pos,self.local_desktop_pos)
-            self.gpcontrol.start()
-            if self.action_plan.isRunning():
-                print("Task already running")
-            else:
-                self.action_plan.start()
-            action_play = False
-            self.progress_value = 0  # 复位进度
-            self.task_timer.start(10)
-            self.result_label.setText("task start")
-            time.sleep(1)
+        self.gpcontrol.start()
+        if self.action_plan.isRunning():
+            print("Task already running")
+        else:
+            self.action_plan.start()
+        action_play = False
+        self.progress_value = 0  # 复位进度
+        self.task_timer.start(100)
+        self.result_label.setText("task start")
+        time.sleep(1)
     def on_stop_task_btn_click(self):
-        self.robot.stop()
+        self.robot.stop(robot_num=1)
+        self.robot.stop(robot_num=2)
         self.task_timer.stop()
         # self.camera_timer.stop()
         self.gpcontrol.stop()
@@ -1149,39 +1259,48 @@ class run_main_windows(QWidget):
         # print(self.traja_reverse_signal)
         # if not self.traja_reverse_signal:
         start_time = time.time()
+        # time.sleep(5)
         if not False:
+            
             self.progress_value += 1
             # print(f"当前进度: {self.progress_value}")
             self.progress_bar.setValue(self.progress_value)
-            # start = time.time()
-
-            angle_qpos=self.robot.get_state()
+   
+            angle_qpos_robot_num_1=self.robot.get_state(model='joint',robot_num=1)
+            angle_qpos_robot_num_2=self.robot.get_state(model='joint',robot_num=2)
+         
             # if self.robot.get_state('pose'):
             #     self.robot.set_state(self.robot.get_state('pose'))
             # print(time.time()-start)
-            radius_qpos = [math.radians(j) for j in angle_qpos]
+            radius_qpos_robot_num_1 = [math.radians(j) for j in angle_qpos_robot_num_1]
+            radius_qpos_robot_num_2 = [math.radians(j) for j in angle_qpos_robot_num_2]
             # 处理 gpstate
-            # print(self.gpstate)
+            # time.sleep(10)
             if self.gpstate:
-                gpstate, gppos, gpforce = map(lambda x: str(x) if not isinstance(x, str) else x, self.gpstate)
-                radius_qpos.extend([int(gpstate, 16), int(gppos, 16), int(gpforce, 16)])
+                gpstate, gppos, gpforce = map(lambda x: str(x) if not isinstance(x, str) else x, self.gpstate[0])
+                radius_qpos_robot_num_1.extend([int(gppos, 16), int(gpforce, 16)])
+                gpstate, gppos, gpforce = map(lambda x: str(x) if not isinstance(x, str) else x, self.gpstate[1])
+                radius_qpos_robot_num_2.extend([int(gppos, 16), int(gpforce, 16)])      
             else:
                 raise ValueError("error in gpstate")
             # 记录 qpos 数据
-            self.qpos_list.append(radius_qpos)
+            gp_data = [x for row in [radius_qpos_robot_num_1,radius_qpos_robot_num_2] for x in row]
+            print(f"gp_data shape:{np.array(gp_data).shape}")
+            # print(f"qpos_list:{radius_qpos_robot_num_1},{radius_qpos_robot_num_2},{[radius_qpos_robot_num_1,radius_qpos_robot_num_2]}")
+            self.qpos_list.append(gp_data)
             # 记录图像数据
             if self.image:
                 for camera_name in camera_names:
                     self.images_dict[camera_name].append(self.image.get(camera_name))
 
-            if self.close_signal:
-                time.sleep(0.1)
-            else:
-                time.sleep(0.1)
+            # if self.close_signal:
+            #     time.sleep(0.1)
+            # else:
+            #     time.sleep(0.1)
             if self.traja_reverse_signal is True and self.task_complete_step == 0:
                 self.task_complete_step = self.progress_value
         end_time = time.time()
-        print(f"一帧时间：{end_time - start_time}")
+        # print(f"一帧时间：{end_time - start_time}")
             # 任务完成检查
         # if self.progress_value:
             # if self.progress_value >= 100:
@@ -1209,7 +1328,8 @@ class run_main_windows(QWidget):
         self.traja_reverse_signal = traja_feed_back
         print(f"traja_reverse_signal :{traja_feed_back}")
     def handle_action_signal(self,action_feed_back):
-        self.gpcontrol.set_state_flag(action_feed_back)
+        print(action_feed_back[0],action_feed_back[1])
+        self.gpcontrol.set_state_flag(action_feed_back[0],action_feed_back[1])
     def handle_complete_signal(self,complete_feed_back):
         self.complete_sign =complete_feed_back
         print(f"complete_sign :{complete_feed_back}")
@@ -1351,9 +1471,9 @@ class run_main_windows(QWidget):
 
             if self.index > self.end_index:
                 self.result_label.setText("task over please restart or close")
-
+            time.sleep(10)
             save_signal = False
-
+            
         except Exception as e:
             print(f"Save data error: {e}")
             self.result_label.setText(f"保存出错：{str(e)}")

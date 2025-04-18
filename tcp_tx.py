@@ -171,7 +171,7 @@ class PersistentClient:
         if not isinstance(value, list) or len(value) != 6:
             print("[ERROR] 输入必须是包含6个数值的列表")
             return False
-
+        # print(f"id:{robotnum}")
         if model not in ["joint", "pose"]:
             print("[ERROR] 模式参数必须是 'joint' 或 'pose'")
             return False
@@ -266,10 +266,10 @@ class PersistentClient:
 
 if __name__ == "__main__":
     client = PersistentClient('192.168.2.14', 8001)
-    client.set_close(1)
-    time.sleep(1)
-    client.set_clear(1)
-    client.set_open(1)  
+    client.set_close(2)
+    time.sleep(2)
+    client.set_clear(2)
+    client.set_open(2)  
     while True:
         try:
             message = input("> ")  # 🟢 从命令行获取输入1
@@ -288,16 +288,23 @@ if __name__ == "__main__":
             if message == "1,2":
                 deta = client.get_arm_position_joint(2)#[191.699, -68.037, 585.006, 1.08749, 1.40397, 1.99036]
                 print(deta)
+            if message =="1,3":
+                client.set_close(1)
+                time.sleep(1)
+                client.set_clear(1)
+                client.set_open(1) 
+                client.set_arm_position([-127.243, -584.915, -238.195, 2.83726, -0.121101, 0.283056],"pose",1)
+
             if message == "1":
                 client.set_speed(1)
 
             if message == "2":
-                client.set_arm_position( [-9.54279, -130.451, 1095.91, 0.102584, -0.0106383, 1.50631],"pose",1)
+                client.set_arm_position([320.871, 8.02429, 569.908, -2.77289, 1.54682, -0.36409],"pose",2)
                 # client.set_arm_position([-135.806, -657.58, -132.078, 2.35454, 0.0848985, 1.51967],"pose",1)
                 # client.set_arm_position( [-81.1963, -580.862, 115.466, 2.73102, -0.00482064, 2.98929],"pose",1)
                 # client.set_arm_position( [-103.907, -629.442, -42.2999, 2.50661, -0.00864752, 3.0262],"pose",1)
             if message == "2,2":
-                deta = client.set_arm_position([-9.54279, -130.451, 1095.91, 0.102584, -0.0106383, 1.50631],"pose",1)
+                deta = client.set_arm_position([-122.974, 633.268, -171.206, -2.37881, -0.126129, -3.09906],"pose",2)
                 print(deta)
             if message == "3":
                 i=1
@@ -310,12 +317,27 @@ if __name__ == "__main__":
                     i += 1
     
             if message == "4":
-                client.set_close(2)
+                client.set_close(1)
                 time.sleep(1)
-                client.set_clear(2)
-                client.set_open(2) 
+                client.set_clear(1)
+                client.set_open(1) 
                 # client.get_arm_position_pose(2)
-                deta = client.set_arm_position([99.9124, -76.62, 75.8574, -30.5756, -28.869, 24.2967], "joint", 2)
+                # deta = client.set_arm_position([-124.602, -752.314, -212.362, 2.47183, -0.00238126, 1.49759], "pose", 1)
+            if message == "4.1":
+                deta = client.set_arm_position([-122.668, -810.366, -283.547, 2.47194, -0.00226187, 1.49765], "pose", 1)
+                print(deta)
+            if message == "4.2":
+                deta = client.set_arm_position([-104.753, -812.254, -283.736, 2.47097, 0.048749, 1.49756], "pose", 1)
+                print(deta)
+            if message == "4.3":
+                deta = client.set_arm_position([-112.935, -749.491, -200.365, 2.50606, 0.0133301, 1.49744], "pose", 1)
+                print(deta)
+            if message == "4.4":
+                deta = client.set_arm_position([-41.108, -734.451, 207.087, 2.28157, 0.145945, 1.33637], "pose", 1)
+                print(deta)
+            if message == "0":
+                deta = client.get_arm_position_pose(1)
+                print(deta)
             if message == "5":
                 deta = client.send_message("stop,1")
             if message == "6":
