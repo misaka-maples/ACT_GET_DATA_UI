@@ -142,8 +142,7 @@ class GPCONTROL(QThread):
         """读取串口返回数据并过滤符合头尾要求的数据"""
         ser = self.ser
         if ser and ser.is_open:
-            if ser.in_waiting > 0:
-                data = ser.read(64)  # 读取最大 64 字节
+            data = ser.read(64)  # 读取最大 64 字节
             if data:
                 valid_frames = self.filter_can_data(data)
                 if valid_frames:
@@ -1149,6 +1148,7 @@ class run_main_windows(QWidget):
     def updata_collect_task(self):
         # print(self.traja_reverse_signal)
         # if not self.traja_reverse_signal:
+        start_time = time.time()
         if not False:
             self.progress_value += 1
             # print(f"当前进度: {self.progress_value}")
@@ -1174,14 +1174,14 @@ class run_main_windows(QWidget):
                 for camera_name in camera_names:
                     self.images_dict[camera_name].append(self.image.get(camera_name))
 
-
             if self.close_signal:
-                pass
-                time.sleep(0.09)
+                time.sleep(0.1)
             else:
-                time.sleep(0.09)
+                time.sleep(0.1)
             if self.traja_reverse_signal is True and self.task_complete_step == 0:
                 self.task_complete_step = self.progress_value
+        end_time = time.time()
+        print(f"一帧时间：{end_time - start_time}")
             # 任务完成检查
         # if self.progress_value:
             # if self.progress_value >= 100:
@@ -1343,7 +1343,7 @@ class run_main_windows(QWidget):
             if data_dict_add:
                 data_dict_add['/observations/qpos'] = self.qpos_array[:self.max_episode_len]
                 data_dict_add['/action'] = self.action_array[:self.max_episode_len]
-                self.generator_hdf5.save_hdf5(data_dict_add, "./hdf5_file_add", self.index)
+                self.generator_hdf5.save_hdf5(data_dict_add, "./hdf5_file_add", self.index, compressed=False)
 
             # 更新索引和状态
             self.task_complete_step = 0

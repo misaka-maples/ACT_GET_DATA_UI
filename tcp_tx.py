@@ -288,7 +288,9 @@ if __name__ == "__main__":
             if message == "1,2":
                 deta = client.get_arm_position_joint(2)#[191.699, -68.037, 585.006, 1.08749, 1.40397, 1.99036]
                 print(deta)
-            
+            if message == "1":
+                client.set_speed(1)
+
             if message == "2":
                 client.set_arm_position( [-9.54279, -130.451, 1095.91, 0.102584, -0.0106383, 1.50631],"pose",1)
                 # client.set_arm_position([-135.806, -657.58, -132.078, 2.35454, 0.0848985, 1.51967],"pose",1)
@@ -312,6 +314,7 @@ if __name__ == "__main__":
                 time.sleep(1)
                 client.set_clear(2)
                 client.set_open(2) 
+                # client.get_arm_position_pose(2)
                 deta = client.set_arm_position([99.9124, -76.62, 75.8574, -30.5756, -28.869, 24.2967], "joint", 2)
             if message == "5":
                 deta = client.send_message("stop,1")
