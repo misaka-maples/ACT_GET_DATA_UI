@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import QApplication, QWidget, QComboBox, QLineEdit,QPushBut
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtCore import QTimer,QThread, pyqtSignal, QMutex
 import threading
-
+from camera_hot_plug import CAMERA_HOT_PLUG
 
 
 frames_queue_lock = Lock()
@@ -34,22 +34,22 @@ config_file_path = os.path.join(os.path.dirname(__file__), "../config/multi_devi
 multi_device_sync_config = {}
 camera_names = ['left_wrist','top','right_wrist']
 save_signal = False
-class GPCONTROL(QThread):
+traj_signal = 1
+class   GPCONTROL(QThread):
     error_signal = pyqtSignal(object)
     gp_control_state_signal = pyqtSignal(object)  # 反馈信号，用于 UI 连接
     def __init__(self,parent=None, DEFAULT_SERIAL_PORTS = ("/dev/ttyACM0","/dev/ttyACM1","/dev/ttyACM2")):
         super().__init__(parent)
-        self.state_flag = 0  # 夹爪状态: 0=关, 1=半开, 2=开
+        self.state_flag = 128  # 夹爪状态: 0=关, 1=半开, 2=开
         self.running = True  # 控制线程运行
         self.control_command = ""  # 当前控制命令
         self.DEFAULT_SERIAL_PORTS = DEFAULT_SERIAL_PORTS
         self.BAUD_RATE = 50000
-        self.id = 1
         self.min_data = b'\x00\x00\xFF\xFF\xFF\xFF\x00\x00'
         self.max_data = b'\x00\xFF\xFF\xFF\xFF\xFF\x00\x00'
         self.ser = self.open_serial()
         self.is_sending = False
-        self.state_data_1=0
+        self.state_data_1=128
         self.state_data_2=0
         self.task_complete = False
         self.is_configured = False  # 配置标志位
@@ -94,12 +94,12 @@ class GPCONTROL(QThread):
             # time.sleep(0.02)
             end_time = time.time()
             # print(f"耗时:{(end_time - start_time)*1000:.2f} ms")
-    def set_state_flag(self,value,id):
+    def set_state_flag(self,value):
         """修改 self.state_flag"""
         self.state_data_1 = value[0]
         self.state_data_2 = value[1]
-        self.id = id
-        
+        # while True:
+            
     def stop(self):
         """
         退出线程
@@ -249,7 +249,23 @@ class GPCONTROL(QThread):
                     data = self.read_data()
                     if data is not None:
                         _, gpdata = data
-                gpstate,gppos,gpforce = gpdata[16:18],gpdata[18:20],gpdata[22:24]
+                        # print(gpdata,gpdata[2:4])
+                        # print(type(data),type(gpdata))
+
+                        # if gpdata[2:4] == b'\x88':
+                        #     print("can1")
+                        # if gpdata[2:4] == b'\x08':
+                        #     print("can0")
+                canid, gpstate,gppos,gpforce = gpdata[2:4],gpdata[16:18],gpdata[18:20],gpdata[22:24]
+                # print(canid,can_id)
+                if canid == '88' and can_id == 1:
+                    # print("can1")
+                    pass
+                elif canid == '08' and can_id == 0:
+                    # print("can0")
+                    pass
+                else:
+                    continue
                 return [gpstate,gppos,gpforce]
     def close_gp(self):
         close_gp = b'\x00\x00\xFF\xFF\xFF\xFF\x00\x00'
@@ -294,7 +310,7 @@ class GPCONTROL(QThread):
 class ROBOT:
     def __init__(self):
         self.joint_state_right=None
-        self.Client = PersistentClient('192.168.2.14', 8001)
+        self.Client = PersistentClient('192.168.3.15', 8001)
         # self.Client = PersistentClient('192.168.2.14', 8001)
         # self.Client.set_close(robot_num)
         # self.Client.set_clear(robot_num)
@@ -350,56 +366,38 @@ class ACTION_PLAN(QThread):
         self.loop_len=1
         self.complete =False
         self.task_name = 'exchange'
-        self.duikong_points = []
+        # self.duikong_points = [
+        #             [-127.243, -584.915, -238.195, 2.83726, -0.121101, 0.283056],#左手，先开爪
+        #             [-122.727, -575.222, -306.648, 2.51579, -0.107995, 0.084948],
+        #             [-133.111, -603.627, -349.451, 2.41829, 0.0258569, 0.0772928],#关闭左，开右夹爪
+        #             [-126.106, -676.665, -177.715, 2.52124, -0.176581, 0.523211],
+        #             [-124.602, -752.314, -212.362, 2.47183, -0.00238126, 1.49759],
+        #             [-122.668, -810.366, -283.547, 2.47194, -0.00226187, 1.49765],
+        #             ]
         self.change_points_right = [
                     [320.871, 8.02429, 569.908, -2.77289, 1.54682, -0.36409],   #右手                 
                     [231.133, 157.494, 682.548, -1.14296, 1.00109, -1.89602],
                     [-77.3069, 482.59, 523.98, -1.74372, -0.200726, -1.37602],
                     [-105.948, 601.398, 173.911, -2.39015, -0.206311, -1.52225],
                     [-118.023, 668.517, -105.539, -2.20681, -0.119449, -2.58369],
-                    [-122.974, 633.268, -171.206, -2.37881, -0.126129, -3.09906],
-        ]
+                    [-132.427, 620.664, -172.781, -2.37856, -0.125904, -3.09914],
+                    ]
         self.right_complete_flag = False
         self.change_points_left = [
-                    #    [-66.5918, -480.683, 341.961, 2.36635, -0.0480989, 1.43767],#第一版
-                    #    [-134.102, -541.192, 2.5797, 2.36486, 0.0714842, 1.43293],
-                    #    [-143.225, -602.043, -69.8797, 2.34887, 0.0679714, 1.51996],
-                    #    [-143.773, -654.774, -133.036, 2.34891, 0.0677073, 1.52],
-                    #    [-122.714, -653.022, -132.788, 2.34881, 0.0675977, 1.52006],
-                    #    [-66.5918, -480.683, 341.961, 2.36635, -0.0480989, 1.43767],#第二版
-                    #    [-95.0238, -588.402, 124.545, 2.35329, -0.0531227, 1.43677],
-                    #    [-109.613, -579.638, -56.7167, 1.94239, -0.225811, 1.37319],
-                    #    [-139.921, -544.635, -183.422, 1.97974, 0.0461738, 1.43546],
-                    #    [-137.118, -601.257, -208.017, 1.98002, 0.0460499, 1.4354],
-                    #    [-121.42, -599.741, -209.687, 1.98009, 0.0459801, 1.43546], 
-                    # [-127.182, -740.602, -84.8895, 2.09826, -0.0342467, 1.66033],#第三版
-                    # [-122.838, -800.168, -196.384, 2.12972, 0.0466091, 1.43007],
-                    # [-126.263, -801.374, -296.735, 2.12947, 0.0464736, 1.42999],
-                    # [-110.854, -801.413, -296.686, 2.12938, 0.0463978, 1.43004],
-
-
-
-                    # [320.871, 8.02429, 569.908, -2.77289, 1.54682, -0.36409],   #右手                 
-                    # [231.133, 157.494, 682.548, -1.14296, 1.00109, -1.89602],
-                    # [-77.3069, 482.59, 523.98, -1.74372, -0.200726, -1.37602],
-                    # [-105.948, 601.398, 173.911, -2.39015, -0.206311, -1.52225],
-                    # [-118.023, 668.517, -105.539, -2.20681, -0.119449, -2.58369],
-                    # [-122.974, 633.268, -171.206, -2.37881, -0.126129, -3.09906],
-
-
-                    [-127.243, -584.915, -238.195, 2.83726, -0.121101, 0.283056],#左手，先开爪
-                    [-122.727, -575.222, -306.648, 2.51579, -0.107995, 0.084948],
-                    [-133.111, -603.627, -349.451, 2.41829, 0.0258569, 0.0772928],#关闭左，开右夹爪
-                    [-126.106, -676.665, -177.715, 2.52124, -0.176581, 0.523211],
-                    [-124.602, -752.314, -212.362, 2.47183, -0.00238126, 1.49759],
-                    [-122.668, -810.366, -283.547, 2.47194, -0.00226187, 1.49765],
-                    [-103.843, -811.286, -284.241, 2.47199, -0.0021897, 1.49773],
-                    [-122.668, -810.366, -283.547, 2.47194, -0.00226187, 1.49765],
-                    [-112.935, -749.491, -200.365, 2.50606, 0.0133301, 1.49744],
-                    [-41.108, -734.451, 207.087, 2.28157, 0.145945, 1.33637],
-                    [519.871, -238.068, 700.523, 1.0436, 1.36405, 1.83762],
-                    [-41.108, -734.451, 207.087, 2.28157, 0.145945, 1.33637],
-                    [-127.243, -584.915, -238.195, 2.83726, -0.121101, 0.283056]
+                   
+                    [-127.205, -584.918, -238.196, 2.8373, -0.121059, 1.07089],#左手，先开爪
+                   [-122.71, -575.238, -306.627, 2.51576, -0.107987, 0.866255],
+                    [-124.89, -608.516, -345.528, 2.41849, 0.0261467, 0.859578],#关闭左，开右夹爪
+                   [-126.071, -676.698, -177.695, 2.5211, -0.176558, 1.30888],
+                   [-124.581, -752.295, -212.366, 2.47183, -0.00239102, 2.28396],
+                    [-129.127, -810.615, -288.951, 2.4716, -0.00248988, 2.28385],
+                     [-109.0, -811.015, -288.718, 2.47157, -0.00245327, 2.28383],
+                    [-129.127, -810.615, -288.951, 2.4716, -0.00248988, 2.28385],
+                   [-124.961, -813.379, -286.805, 2.47164, -0.00239282, 2.28384],
+                    [-41.0751, -734.438, 207.143, 2.28154, 0.145922, 2.31647],
+                    [629.137, -161.689, 590.811, 1.6477, 1.38221, 2.1665],
+                    [-41.0751, -734.438, 207.143, 2.28154, 0.145922, 2.31647],
+                    [-127.205, -584.918, -238.196, 2.8373, -0.121059, 1.07089]
                        ]  # 存储所有点位
     def val(self, point):
         self.point = point
@@ -414,46 +412,71 @@ class ACTION_PLAN(QThread):
             # self.Robot.rm_65_b_right_arm.rm_movej_p(position_,self.velocity,0,0,1)
             self.Robot.set_state(position_,'pose',robot_num)
     def run(self):
-        global action_play
+        global action_play,save_signal
         while self.running:
+            # print(f"running:{self.running}")
             if action_play :
                 self.move(self.point,robot_num=1)
                 # action_play = False
             else:
-                if save_signal == False:
-                    if self.task_name == 'exchange':
-                        # self.traja_reverse_task_move(self.change_points_left,robot_num=1)
-                        # self.traja_task_move(self.change_points_left[:3],robot_num=1)
-                        self.exchange_task()
-                        
-                    elif self.task_name == 'duikong':
-                        self.traja_task_move(self.duikong_points)
-                    # self.change_task_move()
-                    time.sleep(2)
+                # print(save_signal)
+                if save_signal:
+                    continue
+                if self.right_complete_flag:
+                    pass
+                else:
+                    self.exchange_task()
+                print(save_signal)
+                time.sleep(2)
+                if save_signal:
+                    continue
+                self.duikong()
+                time.sleep(100)
+                self.running = False
                 if not self.running:
                     break
 
     def exchange_task(self):
-        
-        self.action_signal.emit([[128,0],0])
+        global traj_signal
+        self.close_signal.emit(False)
+        traj_signal = 1
+        self.action_signal.emit([128,0])
         time.sleep(1)
         self.complete_signal.emit(False)
         self.traja_task_move(self.change_points_right,robot_num=2)
+        self.close_signal.emit(True)
         time.sleep(1)
         self.traja_task_move(self.change_points_left[:3],robot_num=1)
-
-        time.sleep(1)
-        self.action_signal.emit([[0,128],0])
-        time.sleep(1)
-        self.traja_reverse_task_move(self.change_points_right,robot_num=2)
-        self.traja_task_move(self.change_points_left[3:7],robot_num=1)
+        # time.sleep(1)
+        
+        self.action_signal.emit([0,0])
         time.sleep(2)
+        self.action_signal.emit([0,128])
+        time.sleep(4)
+        self.close_signal.emit(False)
+        # print(len(self.change_points_right),self.change_points_right[:3])
+        self.traja_reverse_task_move(self.change_points_right[3:],robot_num=2)
+        self.action_signal.emit([0,0])
+        # time.sleep(1)
+        self.traja_reverse_task_move(self.change_points_right[:3],robot_num=2)
+        # print("右手运动完成")
+        self.close_signal.emit(True)
+        self.traja_task_move(self.change_points_left[3:7],robot_num=1)
+        # time.sleep(1)
+        self.complete_signal.emit(True)
+        # self.close_signal.emit(False)
+        self.right_complete_flag = True
+
+
+    def duikong(self):
+        global traj_signal
+        traj_signal = 2
         self.traja_task_move(self.change_points_left[7:11],robot_num=1)
-        self.action_signal.emit([[128,128],0])
-        time.sleep(1)
+        self.action_signal.emit([128,0])
+        time.sleep(4)
         self.traja_task_move(self.change_points_left[11:],robot_num=1)
         self.complete_signal.emit(True)
-        
+
     def traja_task_move(self,points,robot_num):
         # if not hasattr(self, "points") or not self.points:
         #     raise ValueError("请先设置至少一个点位")
@@ -467,6 +490,7 @@ class ACTION_PLAN(QThread):
             #     self.close_signal.emit(True)
             # print("运行")
             if point is not None:
+                print(point)
                 # 判断是否是后三个点
                 if idx >= len(points) - 2:
                     self.move(point,robot_num=robot_num)  
@@ -488,9 +512,10 @@ class ACTION_PLAN(QThread):
         #     raise ValueError("请先设置至少一个点位")
 
         # self.traja_reverse_signal.emit(True)
-
+        
         # 逆序遍历 `self.points`，让机器人按原轨迹返回
         for idx, point in enumerate(reversed(points)):
+            # print(point)
             if self.is_close(self.Robot.get_state(model='pose'), point, tolerance=0.1):
                 continue
 
@@ -557,7 +582,7 @@ class ACTION_PLAN(QThread):
 class GENERATOR_HDF5:
     def __init__(self):
         pass
-    def save_hdf5(self,data_dict,path_to_save_hdf5,episode_idx,compressed=True):
+    def save_hdf5(self,data_dict,path_to_save_hdf5,episode_idx,compressed=True,arm_name='all'):
         os.makedirs(path_to_save_hdf5, exist_ok=True)
         self.dataset_path = os.path.join(path_to_save_hdf5, f'episode_{episode_idx}.hdf5')
 
@@ -589,27 +614,60 @@ class GENERATOR_HDF5:
                     if 'qpos' in obs:
                         print("Dataset 'qpos' already exists. Updating it.")
                         del obs['qpos']
-                    qpos_data = np.array(data_dict['/observations/qpos'])
-                    print(f"Saving qpos, shape: {qpos_data.shape}")
-                    obs.create_dataset(
-                        'qpos',
-                        data=qpos_data,
-                        dtype='float32'
-                    )
-
+                    if arm_name == 'all':
+                        qpos_data = np.array(data_dict['/observations/qpos'])
+                        print(f"Saving qpos, shape: {qpos_data.shape}")
+                        obs.create_dataset(
+                            'qpos',
+                            data=qpos_data,
+                            dtype='float32'
+                        )
+                    elif arm_name == 'left_arm':
+                        qpos_data = np.array(data_dict['/observations/qpos'])[:,:8]
+                        print(f"Saving qpos, shape: {qpos_data.shape}")
+                        obs.create_dataset(
+                            'qpos',
+                            data=qpos_data,
+                            dtype='float32'
+                        )
+                    elif arm_name == 'right_arm':
+                        qpos_data = np.array(data_dict['/observations/qpos'])[:,8:]
+                        print(f"Saving qpos, shape: {qpos_data.shape}")
+                        obs.create_dataset(
+                            'qpos',
+                            data=qpos_data,
+                            dtype='float32'
+                        )
                 # 写入 action 数据
                 if '/action' in data_dict:
                     if 'action' in root:
                         print("Dataset 'action' already exists. Updating it.")
                         del root['action']
-                    action_data = np.array(data_dict['/action'])
-                    print(f"Saving action, shape: {action_data.shape}")
-                    root.create_dataset(
-                        'action',
-                        data=action_data,
-                        dtype='float32'
-                    )
-
+                    if arm_name == 'all':
+                        
+                        action_data = np.array(data_dict['/action'])
+                        print(f"Saving action, shape: {action_data.shape}")
+                        root.create_dataset(
+                            'action',
+                            data=action_data,
+                            dtype='float32'
+                        )
+                    elif arm_name == 'left_arm':
+                        action_data = np.array(data_dict['/action'])[:,:8]
+                        print(f"Saving action, shape: {action_data.shape}")
+                        root.create_dataset(
+                            'action',
+                            data=action_data,
+                            dtype='float32'
+                        )
+                    elif arm_name == 'right_arm':
+                        action_data = np.array(data_dict['/action'])[:,8:]
+                        print(f"Saving action, shape: {action_data.shape}")
+                        root.create_dataset(
+                            'action',
+                            data=action_data,
+                            dtype='float32'
+                        )
                 # 保存 gpstate, gppos, gpforce 数据
                 if '/gp/gppos' in data_dict:
                     if 'gppos' in gp:
@@ -664,379 +722,414 @@ class GENERATOR_HDF5:
         
         print(f"\033[92mData saved to {self.dataset_path}\033[0m")
 
-class CAMERA():
-    def __init__(self):
-        ctx = Context()
-        self.device_list = ctx.query_devices()
-        self.curr_device_cnt = self.device_list.get_count()
-        self.pipelines: list[Pipeline] = []
-        self.configs: list[Config] = []
-        self.serial_number_list:list[str] = ["" for _ in range(self.curr_device_cnt) ]
-        self.color_frames_queue: dict[str, Queue] = {}
-        self.depth_frames_queue: dict[str, Queue] = {}
-        self.setup_cameras()
-        self.start_streams()
-        # self.frames:FrameSet=None
-        print("相机初始化完成")
-    def setup_cameras(self):
-        self.read_config(config_file_path)
+# class CAMERA():
+#     def __init__(self):
+#         ctx = Context()
+#         self.device_list = ctx.query_devices()
+#         self.curr_device_cnt = self.device_list.get_count()
+#         self.pipelines: list[Pipeline] = []
+#         self.configs: list[Config] = []
+#         self.serial_number_list:list[str] = ["" for _ in range(self.curr_device_cnt) ]
+#         self.color_frames_queue: dict[str, Queue] = {}
+#         self.depth_frames_queue: dict[str, Queue] = {}
+#         self.setup_cameras()
+#         self.start_streams()
+#         # self.frames:FrameSet=None
+#         print("相机初始化完成")
+#     def setup_cameras(self):
+#         self.read_config(config_file_path)
 
-        if self.curr_device_cnt == 0:
-            print("No device connected")
-            return
-        if self.curr_device_cnt > MAX_DEVICES:
-            print("Too many devices connected")
-            return
+#         if self.curr_device_cnt == 0:
+#             print("No device connected")
+#             return
+#         if self.curr_device_cnt > MAX_DEVICES:
+#             print("Too many devices connected")
+#             return
 
-        for i in range(self.curr_device_cnt):
-            device = self.device_list.get_device_by_index(i)
-            serial_number = device.get_device_info().get_serial_number()
+#         for i in range(self.curr_device_cnt):
+#             device = self.device_list.get_device_by_index(i)
+#             serial_number = device.get_device_info().get_serial_number()
         
-            # **初始化帧队列**
-            self.color_frames_queue[serial_number] = Queue()
-            self.depth_frames_queue[serial_number] = Queue()
-            pipeline = Pipeline(device)
-            config = Config()
-            sync_config_json = multi_device_sync_config[serial_number]
-            sync_config = device.get_multi_device_sync_config()
-            sync_config.mode = self.sync_mode_from_str(sync_config_json["config"]["mode"])
-            sync_config.color_delay_us = sync_config_json["config"]["color_delay_us"]
-            sync_config.depth_delay_us = sync_config_json["config"]["depth_delay_us"]
-            sync_config.trigger_out_enable = sync_config_json["config"]["trigger_out_enable"]
-            sync_config.trigger_out_delay_us = sync_config_json["config"]["trigger_out_delay_us"]
-            sync_config.frames_per_trigger = sync_config_json["config"]["frames_per_trigger"]
-            device.set_multi_device_sync_config(sync_config)
-            try:
-                profile_list = pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
-                color_profile: VideoStreamProfile = profile_list.get_default_video_stream_profile()
-                config.enable_stream(color_profile)
-                profile_list = pipeline.get_stream_profile_list(OBSensorType.DEPTH_SENSOR)
-                depth_profile = profile_list.get_default_video_stream_profile()
-                config.enable_stream(depth_profile)
+#             # **初始化帧队列**
+#             self.color_frames_queue[serial_number] = Queue()
+#             self.depth_frames_queue[serial_number] = Queue()
+#             pipeline = Pipeline(device)
+#             config = Config()
+#             sync_config_json = multi_device_sync_config[serial_number]
+#             sync_config = device.get_multi_device_sync_config()
+#             sync_config.mode = self.sync_mode_from_str(sync_config_json["config"]["mode"])
+#             sync_config.color_delay_us = sync_config_json["config"]["color_delay_us"]
+#             sync_config.depth_delay_us = sync_config_json["config"]["depth_delay_us"]
+#             sync_config.trigger_out_enable = sync_config_json["config"]["trigger_out_enable"]
+#             sync_config.trigger_out_delay_us = sync_config_json["config"]["trigger_out_delay_us"]
+#             sync_config.frames_per_trigger = sync_config_json["config"]["frames_per_trigger"]
+#             device.set_multi_device_sync_config(sync_config)
+#             try:
+#                 profile_list = pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
+#                 color_profile: VideoStreamProfile = profile_list.get_default_video_stream_profile()
+#                 config.enable_stream(color_profile)
+#                 profile_list = pipeline.get_stream_profile_list(OBSensorType.DEPTH_SENSOR)
+#                 depth_profile = profile_list.get_default_video_stream_profile()
+#                 config.enable_stream(depth_profile)
 
-                self.pipelines.append(pipeline)
-                self.configs.append(config)
-                self.serial_number_list[i] = serial_number
-            except OBError as e:
-                print(f"setup_cameras error:{e}")
+#                 self.pipelines.append(pipeline)
+#                 self.configs.append(config)
+#                 self.serial_number_list[i] = serial_number
+#             except OBError as e:
+#                 print(f"setup_cameras error:{e}")
 
-    def start_streams(self):
-        # print(type(self.pipelines),type(self.configs),self.configs,self.curr_device_cnt)
-        index = 0
-        print(self.serial_number_list)
-        for index, (pipeline, config, serial) in enumerate(zip(self.pipelines, self.configs, self.serial_number_list)):
-            pipeline.start(
-                config,
-                lambda frame_set, curr_serial=serial: self.on_new_frame_callback(
-                    frame_set, curr_serial
-                ),
-            )
-    def stop_straems(self):
-        for pipeline in self.pipelines:
-            pipeline.stop()
-        self.pipelines=[]
-        self.configs=[]
-        print("device stoped")
-    def on_new_frame_callback(self, frames: FrameSet, serial_number: str):
-        global MAX_QUEUE_SIZE
-        if serial_number not in self.color_frames_queue:
-            print(f"⚠️ WARN: 未识别的相机序列号 {serial_number}，跳过帧处理")
-            return
+#     def start_streams(self):
+#         # print(type(self.pipelines),type(self.configs),self.configs,self.curr_device_cnt)
+#         index = 0
+#         print(self.serial_number_list)
+#         for index, (pipeline, config, serial) in enumerate(zip(self.pipelines, self.configs, self.serial_number_list)):
+#             pipeline.start(
+#                 config,
+#                 lambda frame_set, curr_serial=serial: self.on_new_frame_callback(
+#                     frame_set, curr_serial
+#                 ),
+#             )
+#     def stop_straems(self):
+#         for pipeline in self.pipelines:
+#             pipeline.stop()
+#         self.pipelines=[]
+#         self.configs=[]
+#         print("device stoped")
+#     def on_new_frame_callback(self, frames: FrameSet, serial_number: str):
+#         global MAX_QUEUE_SIZE
+#         if serial_number not in self.color_frames_queue:
+#             print(f"⚠️ WARN: 未识别的相机序列号 {serial_number}，跳过帧处理")
+#             return
 
-        # **获取帧**
-        color_frame = frames.get_color_frame()
-        depth_frame = frames.get_depth_frame()
+#         # **获取帧**
+#         color_frame = frames.get_color_frame()
+#         depth_frame = frames.get_depth_frame()
 
-        # **处理彩色帧**
-        if color_frame is not None:
-            if self.color_frames_queue[serial_number].qsize() >= MAX_QUEUE_SIZE:
-                self.color_frames_queue[serial_number].get()
-            self.color_frames_queue[serial_number].put(color_frame)
+#         # **处理彩色帧**
+#         if color_frame is not None:
+#             if self.color_frames_queue[serial_number].qsize() >= MAX_QUEUE_SIZE:
+#                 self.color_frames_queue[serial_number].get()
+#             self.color_frames_queue[serial_number].put(color_frame)
 
-        # **处理深度帧**
-        if depth_frame is not None:
-            if self.depth_frames_queue[serial_number].qsize() >= MAX_QUEUE_SIZE:
-                self.depth_frames_queue[serial_number].get()
-            self.depth_frames_queue[serial_number].put(depth_frame)
+#         # **处理深度帧**
+#         if depth_frame is not None:
+#             if self.depth_frames_queue[serial_number].qsize() >= MAX_QUEUE_SIZE:
+#                 self.depth_frames_queue[serial_number].get()
+#             self.depth_frames_queue[serial_number].put(depth_frame)
 
-    def rendering_frame(self, max_wait=5):
+#     def rendering_frame(self, max_wait=5):
         
-        image_list: dict[str, np.ndarray] = {}
-        start_time = time.time()  # 记录开始时间
-        color_width, color_height = None, None  # 用于存储最终拼接尺寸
+#         image_list: dict[str, np.ndarray] = {}
+#         start_time = time.time()  # 记录开始时间
+#         color_width, color_height = None, None  # 用于存储最终拼接尺寸
 
-        while len(image_list) != self.curr_device_cnt:  # 直接判断字典长度
-            if time.time() - start_time > max_wait:  # **超时处理**
-                print("⚠️ WARN: 渲染超时，部分相机未收到帧数据")
-                break
+#         while len(image_list) != self.curr_device_cnt:  # 直接判断字典长度
+#             if time.time() - start_time > max_wait:  # **超时处理**
+#                 print("⚠️ WARN: 渲染超时，部分相机未收到帧数据")
+#                 break
 
-            for serial_number in self.color_frames_queue.keys():
-                color_frame = None
-                depth_frame = None
+#             for serial_number in self.color_frames_queue.keys():
+#                 color_frame = None
+#                 depth_frame = None
 
-                if not self.color_frames_queue[serial_number].empty():
-                    color_frame = self.color_frames_queue[serial_number].get()
-                if not self.depth_frames_queue[serial_number].empty():
-                    depth_frame = self.depth_frames_queue[serial_number].get()
+#                 if not self.color_frames_queue[serial_number].empty():
+#                     color_frame = self.color_frames_queue[serial_number].get()
+#                 if not self.depth_frames_queue[serial_number].empty():
+#                     depth_frame = self.depth_frames_queue[serial_number].get()
 
-                if color_frame is None and depth_frame is None:
-                    continue  # 跳过无数据的相机
+#                 if color_frame is None and depth_frame is None:
+#                     continue  # 跳过无数据的相机
 
-                color_image = None
-                depth_image = None
+#                 color_image = None
+#                 depth_image = None
 
-                if color_frame is not None:
-                    color_width, color_height = color_frame.get_width(), color_frame.get_height()
-                    color_image = frame_to_bgr_image(color_frame)
+#                 if color_frame is not None:
+#                     color_width, color_height = color_frame.get_width(), color_frame.get_height()
+#                     color_image = frame_to_bgr_image(color_frame)
 
-                if depth_frame is not None:
-                    width, height = depth_frame.get_width(), depth_frame.get_height()
-                    scale = depth_frame.get_depth_scale()
-                    depth_format = depth_frame.get_format()
-                    if depth_format != OBFormat.Y16:
-                        print(f"⚠️ WARN: 相机 {serial_number} 深度格式非 Y16，跳过处理")
-                        continue
-                    depth_data = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape((height, width))
-                    depth_data = (depth_data.astype(np.float32) * scale).astype(np.uint8)
-                    depth_image = cv2.applyColorMap(cv2.normalize(depth_data, None, 0, 255, cv2.NORM_MINMAX), cv2.COLORMAP_JET)
+#                 if depth_frame is not None:
+#                     width, height = depth_frame.get_width(), depth_frame.get_height()
+#                     scale = depth_frame.get_depth_scale()
+#                     depth_format = depth_frame.get_format()
+#                     if depth_format != OBFormat.Y16:
+#                         print(f"⚠️ WARN: 相机 {serial_number} 深度格式非 Y16，跳过处理")
+#                         continue
+#                     depth_data = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape((height, width))
+#                     depth_data = (depth_data.astype(np.float32) * scale).astype(np.uint8)
+#                     depth_image = cv2.applyColorMap(cv2.normalize(depth_data, None, 0, 255, cv2.NORM_MINMAX), cv2.COLORMAP_JET)
 
-                if color_image is not None:
-                    image_list[serial_number] = color_image  # 使用 `serial_number` 作为 key
+#                 if color_image is not None:
+#                     image_list[serial_number] = color_image  # 使用 `serial_number` 作为 key
 
-            # **拼接所有图像**
-            if len(image_list) == self.curr_device_cnt and color_width is not None and color_height is not None:
-                result_image = np.hstack(list(image_list.values()))
-                result_image = cv2.resize(result_image, (color_width, color_height))  # 统一尺寸
-                break
+#             # **拼接所有图像**
+#             if len(image_list) == self.curr_device_cnt and color_width is not None and color_height is not None:
+#                 result_image = np.hstack(list(image_list.values()))
+#                 result_image = cv2.resize(result_image, (color_width, color_height))  # 统一尺寸
+#                 break
 
-        return image_list
+#         return image_list
 
-    def rendering_frame_(self):
-        global stop_rendering
-        image_list: dict[int, np.ndarray] = {}
-        color_width, color_height = 0, 0
-        while len(image_list) < self.curr_device_cnt:
-            all_color_frames = {}
+#     def rendering_frame_(self):
+#         global stop_rendering
+#         image_list: dict[int, np.ndarray] = {}
+#         color_width, color_height = 0, 0
+#         while len(image_list) < self.curr_device_cnt:
+#             all_color_frames = {}
 
-            # 遍历所有设备，确保所有设备的 color 帧同步
-            for i in range(self.curr_device_cnt):
-                if not self.color_frames_queue[i].empty():
-                    while not self.color_frames_queue[i].empty():
-                        latest_color_frame = self.color_frames_queue[i].get()  # 丢弃旧帧，取最新
-                    all_color_frames[i] = latest_color_frame  # 只存最新帧
+#             # 遍历所有设备，确保所有设备的 color 帧同步
+#             for i in range(self.curr_device_cnt):
+#                 if not self.color_frames_queue[i].empty():
+#                     while not self.color_frames_queue[i].empty():
+#                         latest_color_frame = self.color_frames_queue[i].get()  # 丢弃旧帧，取最新
+#                     all_color_frames[i] = latest_color_frame  # 只存最新帧
             
-            # 等待所有设备都拿到最新 color 帧
-            if len(all_color_frames) == self.curr_device_cnt:
-                for i in range(self.curr_device_cnt):
-                    color_image = frame_to_bgr_image(all_color_frames[i])
-                    color_width, color_height = all_color_frames[i].get_width(), all_color_frames[i].get_height()
-                    image_list[i] = color_image
+#             # 等待所有设备都拿到最新 color 帧
+#             if len(all_color_frames) == self.curr_device_cnt:
+#                 for i in range(self.curr_device_cnt):
+#                     color_image = frame_to_bgr_image(all_color_frames[i])
+#                     color_width, color_height = all_color_frames[i].get_width(), all_color_frames[i].get_height()
+#                     image_list[i] = color_image
 
-            # 确保 image_list 不会超出 curr_device_cnt
-            if len(image_list) > self.curr_device_cnt:
-                image_list.clear()
+#             # 确保 image_list 不会超出 curr_device_cnt
+#             if len(image_list) > self.curr_device_cnt:
+#                 image_list.clear()
 
-        # 确保所有图像大小一致
-        target_size = (color_height, color_width)
-        image_list = {k: cv2.resize(v, target_size) for k, v in image_list.items()}
+#         # 确保所有图像大小一致
+#         target_size = (color_height, color_width)
+#         image_list = {k: cv2.resize(v, target_size) for k, v in image_list.items()}
 
-        # 拼接时确保设备顺序一致
-        if len(image_list) == self.curr_device_cnt:
-            result_image = np.hstack([image_list[i] for i in sorted(image_list.keys())])
+#         # 拼接时确保设备顺序一致
+#         if len(image_list) == self.curr_device_cnt:
+#             result_image = np.hstack([image_list[i] for i in sorted(image_list.keys())])
 
-            return result_image
-    def sync_mode_from_str(self, sync_mode_str: str) -> OBMultiDeviceSyncMode:
+#             return result_image
+#     def sync_mode_from_str(self, sync_mode_str: str) -> OBMultiDeviceSyncMode:
 
-        # to lower case
-        sync_mode_str = sync_mode_str.upper()
-        if sync_mode_str == "FREE_RUN":
-            return OBMultiDeviceSyncMode.FREE_RUN
-        elif sync_mode_str == "STANDALONE":
-            return OBMultiDeviceSyncMode.STANDALONE
-        elif sync_mode_str == "PRIMARY":
-            return OBMultiDeviceSyncMode.PRIMARY
-        elif sync_mode_str == "SECONDARY":
-            return OBMultiDeviceSyncMode.SECONDARY
-        elif sync_mode_str == "SECONDARY_SYNCED":
-            return OBMultiDeviceSyncMode.SECONDARY_SYNCED
-        elif sync_mode_str == "SOFTWARE_TRIGGERING":
-            return OBMultiDeviceSyncMode.SOFTWARE_TRIGGERING
-        elif sync_mode_str == "HARDWARE_TRIGGERING":
-            return OBMultiDeviceSyncMode.HARDWARE_TRIGGERING
-        else:
-            raise ValueError(f"Invalid sync mode: {sync_mode_str}")
-    def read_config(self, config_file: str):
-        global multi_device_sync_config
-        with open(config_file, "r") as f:
-            config = json.load(f)
-        for device in config["devices"]:
-            multi_device_sync_config[device["serial_number"]] = device
-            print(f"Device {device['serial_number']}: {device['config']['mode']}")
+#         # to lower case
+#         sync_mode_str = sync_mode_str.upper()
+#         if sync_mode_str == "FREE_RUN":
+#             return OBMultiDeviceSyncMode.FREE_RUN
+#         elif sync_mode_str == "STANDALONE":
+#             return OBMultiDeviceSyncMode.STANDALONE
+#         elif sync_mode_str == "PRIMARY":
+#             return OBMultiDeviceSyncMode.PRIMARY
+#         elif sync_mode_str == "SECONDARY":
+#             return OBMultiDeviceSyncMode.SECONDARY
+#         elif sync_mode_str == "SECONDARY_SYNCED":
+#             return OBMultiDeviceSyncMode.SECONDARY_SYNCED
+#         elif sync_mode_str == "SOFTWARE_TRIGGERING":
+#             return OBMultiDeviceSyncMode.SOFTWARE_TRIGGERING
+#         elif sync_mode_str == "HARDWARE_TRIGGERING":
+#             return OBMultiDeviceSyncMode.HARDWARE_TRIGGERING
+#         else:
+#             raise ValueError(f"Invalid sync mode: {sync_mode_str}")
+#     def read_config(self, config_file: str):
+#         global multi_device_sync_config
+#         with open(config_file, "r") as f:
+#             config = json.load(f)
+#         for device in config["devices"]:
+#             multi_device_sync_config[device["serial_number"]] = device
+#             print(f"Device {device['serial_number']}: {device['config']['mode']}")
 
-class CAMERA_HOT_PLUG:
-    def __init__(self):
-        self.mutex = QMutex()
-        self.ctx = Context()
-        self.device_list = self.ctx.query_devices()
-        self.curr_device_cnt = self.device_list.get_count()
-        self.pipelines: list[Pipeline] = []
-        self.configs: list[Config] = []
-        self.serial_number_list: list[str] = ["" for _ in range(self.curr_device_cnt)]
-        self.color_frames_queue: dict[str, Queue] = {}
-        self.depth_frames_queue: dict[str, Queue] = {}
-        self.setup_cameras()
-        self.start_streams()
-        self.running_device = True
-        self.change_signal = False
-        print("相机初始化完成")
-        self.monitor_thread = threading.Thread(target=self.monitor_devices, daemon=True)
-        self.monitor_thread.start()
+class TemporalFilter:
+    def __init__(self, alpha=0.5):
+        self.alpha = alpha
+        self.previous_frame = None
+
+    def process(self, frame):
+        if self.previous_frame is None:
+            self.previous_frame = frame
+            return frame
+        result = cv2.addWeighted(frame, self.alpha, self.previous_frame, 1 - self.alpha, 0)
+        self.previous_frame = result
+        return result
+# class CAMERA_HOT_PLUG:
+#     def __init__(self):
+#         self.mutex = QMutex()
+#         self.ctx = Context()
+#         self.device_list = self.ctx.query_devices()
+#         self.curr_device_cnt = self.device_list.get_count()
+#         self.pipelines: list[Pipeline] = []
+#         self.configs: list[Config] = []
+#         self.serial_number_list: list[str] = ["" for _ in range(self.curr_device_cnt)]
+#         self.color_frames_queue: dict[str, Queue] = {}
+#         self.depth_frames_queue: dict[str, Queue] = {}
+#         self.setup_cameras()
+#         self.start_streams()
+#         self.running_device = True
+#         self.change_signal = False
+#         print("相机初始化完成")
+#         self.monitor_thread = threading.Thread(target=self.monitor_devices, daemon=True)
+#         self.monitor_thread.start()
         
-    def monitor_devices(self):
-        while self.running_device:
-            time.sleep(2)
-            new_device_list = self.ctx.query_devices()
-            new_device_cnt = new_device_list.get_count()
-            if  new_device_cnt!= self.curr_device_cnt:
-                print("设备变化检测到，重新初始化相机...")
-                self.change_signal = True
-                self.stop_streams()
-                self.device_list = new_device_list
-                self.curr_device_cnt = new_device_cnt
-                self.setup_cameras()
-                self.start_streams()
-                self.change_signal = False
-    def stop(self):
-        self.running_device=False
-        self.monitor_thread.join()
-    def setup_cameras(self):
-        self.read_config(config_file_path)
+#     def monitor_devices(self):
+#         while self.running_device:
+#             time.sleep(2)
+#             new_device_list = self.ctx.query_devices()
+#             new_device_cnt = new_device_list.get_count()
+#             # print(f"new_device_cnt:{new_device_cnt},self.curr_device_cnt:{self.curr_device_cnt}")
+#             if  new_device_cnt!= self.curr_device_cnt:
+#                 print("设备变化检测到，重新初始化相机...")
+#                 self.change_signal = True
+#                 self.stop_streams()
+#                 self.device_list = new_device_list
+#                 self.curr_device_cnt = new_device_cnt
+#                 self.setup_cameras()
+#                 self.start_streams()
+#                 self.change_signal = False
+#     def stop(self): 
+#         self.running_device=False
+#         self.monitor_thread.join()
+#     def setup_cameras(self):
+#         self.read_config(config_file_path)
 
-        if self.curr_device_cnt == 0:
-            print("No device connected")
-            return
-        if self.curr_device_cnt > MAX_DEVICES:
-            print("Too many devices connected")
-            return
+#         if self.curr_device_cnt == 0:
+#             print("No device connected")
+#             return
+#         if self.curr_device_cnt > MAX_DEVICES:
+#             print("Too many devices connected")
+#             return
+#         temporal_filter = TemporalFilter(alpha=0.5)  # Modify alpha based on desired smoothness
+#         self.align_filter = AlignFilter(align_to_stream=OBStreamType.COLOR_STREAM)
 
-        for i in range(self.curr_device_cnt):
-            device = self.device_list.get_device_by_index(i)
-            serial_number = device.get_device_info().get_serial_number()
-            
-            self.color_frames_queue[serial_number] = Queue()
-            self.depth_frames_queue[serial_number] = Queue()
-            pipeline = Pipeline(device)
-            config = Config()
-            sync_config_json = multi_device_sync_config[serial_number]
-            sync_config = device.get_multi_device_sync_config()
-            sync_config.mode = self.sync_mode_from_str(sync_config_json["config"]["mode"])
-            sync_config.color_delay_us = sync_config_json["config"]["color_delay_us"]
-            sync_config.depth_delay_us = sync_config_json["config"]["depth_delay_us"]
-            sync_config.trigger_out_enable = sync_config_json["config"]["trigger_out_enable"]
-            sync_config.trigger_out_delay_us = sync_config_json["config"]["trigger_out_delay_us"]
-            sync_config.frames_per_trigger = sync_config_json["config"]["frames_per_trigger"]
-            device.set_multi_device_sync_config(sync_config)
-            try:
-                profile_list = pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
-                color_profile: VideoStreamProfile = profile_list.get_default_video_stream_profile()
-                config.enable_stream(color_profile)
-                profile_list = pipeline.get_stream_profile_list(OBSensorType.DEPTH_SENSOR)
-                depth_profile = profile_list.get_default_video_stream_profile()
-                config.enable_stream(depth_profile)
+#         for i in range(self.curr_device_cnt):
+#             device = self.device_list.get_device_by_index(i)
+#             serial_number = device.get_device_info().get_serial_number()
 
-                self.pipelines.append(pipeline)
-                self.configs.append(config)
-                self.serial_number_list[i] = serial_number
-            except OBError as e:
-                print(f"setup_cameras error:{e}")
+#             self.color_frames_queue[serial_number] = Queue()
+#             self.depth_frames_queue[serial_number] = Queue()
+#             pipeline = Pipeline(device)
+#             config = Config()
+#             sync_config_json = multi_device_sync_config[serial_number]
+#             sync_config = device.get_multi_device_sync_config()
+#             sync_config.mode = self.sync_mode_from_str(sync_config_json["config"]["mode"])
+#             sync_config.color_delay_us = sync_config_json["config"]["color_delay_us"]
+#             sync_config.depth_delay_us = sync_config_json["config"]["depth_delay_us"]
+#             sync_config.trigger_out_enable = sync_config_json["config"]["trigger_out_enable"]
+#             sync_config.trigger_out_delay_us = sync_config_json["config"]["trigger_out_delay_us"]
+#             sync_config.frames_per_trigger = sync_config_json["config"]["frames_per_trigger"]
+#             device.set_multi_device_sync_config(sync_config)
+#             try:
+#                 profile_list = pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
+#                 color_profile: VideoStreamProfile = profile_list.get_default_video_stream_profile()
+#                 config.enable_stream(color_profile)
+#                 profile_list = pipeline.get_stream_profile_list(OBSensorType.DEPTH_SENSOR)
+#                 depth_profile = profile_list.get_default_video_stream_profile()
+#                 config.enable_stream(depth_profile)
 
-    def start_streams(self):
-        print(self.serial_number_list)
-        for index, (pipeline, config, serial) in enumerate(zip(self.pipelines, self.configs, self.serial_number_list)):
-            pipeline.start(
-                config,
-                lambda frame_set, curr_serial=serial: self.on_new_frame_callback(
-                    frame_set, curr_serial
-                ),
-            )
-    def stop_streams(self):
-        self.mutex.lock()
-        try:
-            for pipeline in self.pipelines:
-                pipeline.stop()
-            self.pipelines = []
-            self.configs = []
-            print("device stopped")
-        finally:
-            self.mutex.unlock()
-        print("stop camera -ing")
+#                 self.pipelines.append(pipeline)
+#                 self.configs.append(config)
+#                 self.serial_number_list[i] = serial_number
+#             except OBError as e:
+#                 print(f"setup_cameras error:{e}")
 
-    def on_new_frame_callback(self, frames: FrameSet, serial_number: str):
-        self.mutex.lock()
-        try:
-            global MAX_QUEUE_SIZE
-            if serial_number not in self.color_frames_queue:
-                print(f"⚠️ WARN: 未识别的相机序列号 {serial_number}，跳过帧处理")
-                return
-            color_frame = frames.get_color_frame()
-            depth_frame = frames.get_depth_frame()
-            if color_frame is not None:
-                if self.color_frames_queue[serial_number].qsize() >= MAX_QUEUE_SIZE:
-                    self.color_frames_queue[serial_number].get()
-                self.color_frames_queue[serial_number].put(color_frame)
-            if depth_frame is not None:
-                if self.depth_frames_queue[serial_number].qsize() >= MAX_QUEUE_SIZE:
-                    self.depth_frames_queue[serial_number].get()
-                self.depth_frames_queue[serial_number].put(depth_frame)
-        finally:
-            self.mutex.unlock()
+#     def start_streams(self):
+#         print(self.serial_number_list)
+#         for index, (pipeline, config, serial) in enumerate(zip(self.pipelines, self.configs, self.serial_number_list)):
+#             pipeline.start(
+#                 config,
+#                 lambda frame_set, curr_serial=serial: self.on_new_frame_callback(
+#                     frame_set, curr_serial
+#                 ),
+#             )
+#     def stop_streams(self):
+#         self.mutex.lock()
+#         try:
+#             for pipeline in self.pipelines:
+#                 pipeline.stop()
+#             self.pipelines = []
+#             self.configs = []
+#             print("device stopped")
+#         finally:
+#             self.mutex.unlock()
+#         print("stop camera -ing")
 
-    def rendering_frame(self, max_wait=5):
-        image_dict: dict[str, np.ndarray] = {}
-        start_time = time.time()
-        color_width, color_height = None, None
-        while len(image_dict) != self.curr_device_cnt:
-            if time.time() - start_time > max_wait:
-                print("⚠️ WARN: 渲染超时，部分相机未收到帧数据")
-                break
-            for serial_number in self.color_frames_queue.keys():
-                color_frame = None
-                if not self.color_frames_queue[serial_number].empty():
-                    color_frame = self.color_frames_queue[serial_number].get()
-                if color_frame is None:
-                    continue
-                color_width, color_height = color_frame.get_width(), color_frame.get_height()
-                color_image = frame_to_bgr_image(color_frame)
-                image_dict[serial_number] = color_image
+#     def on_new_frame_callback(self, frames: FrameSet, serial_number: str):
+#         self.mutex.lock()
+#         try:
+#             global MAX_QUEUE_SIZE
+#             if serial_number not in self.color_frames_queue:
+#                 print(f"⚠️ WARN: 未识别的相机序列号 {serial_number}，跳过帧处理")
+#                 return
+#             color_frame = frames.get_color_frame()
+#             depth_frame = frames.get_depth_frame()
+#             # frames = self.align_filter.process(frames)
+#             # color_frame = frames.get_color_frame()
+#             # depth_frame = frames.get_depth_frame()
+#             if color_frame is not None:
+#                 if self.color_frames_queue[serial_number].qsize() >= MAX_QUEUE_SIZE:
+#                     self.color_frames_queue[serial_number].get()
+#                 self.color_frames_queue[serial_number].put(color_frame)
+#             if depth_frame is not None:
+#                 if self.depth_frames_queue[serial_number].qsize() >= MAX_QUEUE_SIZE:
+#                     self.depth_frames_queue[serial_number].get()
+#                 self.depth_frames_queue[serial_number].put(depth_frame)
+#         finally:
+#             self.mutex.unlock()
 
-        return image_dict,color_width, color_height
-    def sync_mode_from_str(self, sync_mode_str: str) -> OBMultiDeviceSyncMode:
+#     def rendering_frame(self, max_wait=5):
+#         image_dict: dict[str, np.ndarray] = {}
+#         start_time = time.time()
+#         color_width, color_height = None, None
+#         while len(image_dict) != self.curr_device_cnt:
+#             if time.time() - start_time > max_wait:
+#                 print("⚠️ WARN: 渲染超时，部分相机未收到帧数据")
+#                 break
+#             for serial_number in self.color_frames_queue.keys():
+#                 color_frame = None
+#                 if not self.color_frames_queue[serial_number].empty():
+#                     color_frame = self.color_frames_queue[serial_number].get()
+#                 if color_frame is None:
+#                     continue
+#                 color_width, color_height = color_frame.get_width(), color_frame.get_height()
+#                 color_image = frame_to_bgr_image(color_frame)
+#                 image_dict[serial_number] = color_image
+#             # for serial_number in self.depth_frames_queue.keys():
+#                 depth_frame = None
+#                 if not self.depth_frames_queue[serial_number].empty():
+#                     depth_frame = self.depth_frames_queue[serial_number].get()
+#                 if depth_frame is None:
+#                     continue
+#                 depth_data = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape(
+#                     (depth_frame.get_height(), depth_frame.get_width()))
+#                 depth_data = depth_data.astype(np.float32) * depth_frame.get_depth_scale()
 
-        # to lower case
-        sync_mode_str = sync_mode_str.upper()
-        if sync_mode_str == "FREE_RUN":
-            return OBMultiDeviceSyncMode.FREE_RUN
-        elif sync_mode_str == "STANDALONE":
-            return OBMultiDeviceSyncMode.STANDALONE
-        elif sync_mode_str == "PRIMARY":
-            return OBMultiDeviceSyncMode.PRIMARY
-        elif sync_mode_str == "SECONDARY":
-            return OBMultiDeviceSyncMode.SECONDARY
-        elif sync_mode_str == "SECONDARY_SYNCED":
-            return OBMultiDeviceSyncMode.SECONDARY_SYNCED
-        elif sync_mode_str == "SOFTWARE_TRIGGERING":
-            return OBMultiDeviceSyncMode.SOFTWARE_TRIGGERING
-        elif sync_mode_str == "HARDWARE_TRIGGERING":
-            return OBMultiDeviceSyncMode.HARDWARE_TRIGGERING
-        else:
-            raise ValueError(f"Invalid sync mode: {sync_mode_str}")
-    def read_config(self, config_file: str):
-        global multi_device_sync_config
-        with open(config_file, "r") as f:
-            config = json.load(f)
-        for device in config["devices"]:
-            multi_device_sync_config[device["serial_number"]] = device
-            print(f"Device {device['serial_number']}: {device['config']['mode']}")
+#                 depth_image = cv2.normalize(depth_data, None, 0, 255, cv2.NORM_MINMAX)
+#                 depth_image = cv2.applyColorMap(depth_image.astype(np.uint8), cv2.COLORMAP_JET)
+#                 depth_image = cv2.addWeighted(color_image, 0.5, depth_image, 0.5, 0)
+#                 if serial_number == 'CP1L44P0004Y':
+#                     cv2.imwrite("color.png",color_image)
+#                     cv2.imwrite("depth.png", depth_image)
+#                     np.save("depth.npy",depth_data)
+#                 # image_dict[serial_number] = depth_image
+#         return image_dict,color_width, color_height
+#     def sync_mode_from_str(self, sync_mode_str: str) -> OBMultiDeviceSyncMode:
+
+#         # to lower case
+#         sync_mode_str = sync_mode_str.upper()
+#         if sync_mode_str == "FREE_RUN":
+#             return OBMultiDeviceSyncMode.FREE_RUN
+#         elif sync_mode_str == "STANDALONE":
+#             return OBMultiDeviceSyncMode.STANDALONE
+#         elif sync_mode_str == "PRIMARY":
+#             return OBMultiDeviceSyncMode.PRIMARY
+#         elif sync_mode_str == "SECONDARY":
+#             return OBMultiDeviceSyncMode.SECONDARY
+#         elif sync_mode_str == "SECONDARY_SYNCED":
+#             return OBMultiDeviceSyncMode.SECONDARY_SYNCED
+#         elif sync_mode_str == "SOFTWARE_TRIGGERING":
+#             return OBMultiDeviceSyncMode.SOFTWARE_TRIGGERING
+#         elif sync_mode_str == "HARDWARE_TRIGGERING":
+#             return OBMultiDeviceSyncMode.HARDWARE_TRIGGERING
+#         else:
+#             raise ValueError(f"Invalid sync mode: {sync_mode_str}")
+#     def read_config(self, config_file: str):
+#         global multi_device_sync_config
+#         with open(config_file, "r") as f:
+#             config = json.load(f)
+#         for device in config["devices"]:
+#             multi_device_sync_config[device["serial_number"]] = device
+#             print(f"Device {device['serial_number']}: {device['config']['mode']}")
 
 class run_main_windows(QWidget):
     def __init__(self):
@@ -1219,7 +1312,7 @@ class run_main_windows(QWidget):
         print(position)
         # action_play = True
     def on_get_robot_state_btn_click(self):
-        self.pose = self.robot.get_state('pose')
+        self.pose = self.robot.get_state('pose',robot_num=1)
         print(self.pose)
         self.input_box.setText(json.dumps(self.pose))
     def on_start_task_btn_click(self):
@@ -1239,7 +1332,7 @@ class run_main_windows(QWidget):
             self.action_plan.start()
         action_play = False
         self.progress_value = 0  # 复位进度
-        self.task_timer.start(100)
+        self.task_timer.start(50)
         self.result_label.setText("task start")
         time.sleep(1)
     def on_stop_task_btn_click(self):
@@ -1268,24 +1361,26 @@ class run_main_windows(QWidget):
    
             angle_qpos_robot_num_1=self.robot.get_state(model='joint',robot_num=1)
             angle_qpos_robot_num_2=self.robot.get_state(model='joint',robot_num=2)
-         
+        
             # if self.robot.get_state('pose'):
             #     self.robot.set_state(self.robot.get_state('pose'))
             # print(time.time()-start)
+
             radius_qpos_robot_num_1 = [math.radians(j) for j in angle_qpos_robot_num_1]
             radius_qpos_robot_num_2 = [math.radians(j) for j in angle_qpos_robot_num_2]
             # 处理 gpstate
             # time.sleep(10)
+            # print(self.gpstate)
             if self.gpstate:
                 gpstate, gppos, gpforce = map(lambda x: str(x) if not isinstance(x, str) else x, self.gpstate[0])
                 radius_qpos_robot_num_1.extend([int(gppos, 16), int(gpforce, 16)])
                 gpstate, gppos, gpforce = map(lambda x: str(x) if not isinstance(x, str) else x, self.gpstate[1])
                 radius_qpos_robot_num_2.extend([int(gppos, 16), int(gpforce, 16)])      
-            else:
-                raise ValueError("error in gpstate")
+            # else:
+            #     raise ValueError("error in gpstate")
             # 记录 qpos 数据
             gp_data = [x for row in [radius_qpos_robot_num_1,radius_qpos_robot_num_2] for x in row]
-            print(f"gp_data shape:{np.array(gp_data).shape}")
+            # print(f"gp_data shape:{np.array(gp_data).shape}")
             # print(f"qpos_list:{radius_qpos_robot_num_1},{radius_qpos_robot_num_2},{[radius_qpos_robot_num_1,radius_qpos_robot_num_2]}")
             self.qpos_list.append(gp_data)
             # 记录图像数据
@@ -1293,10 +1388,11 @@ class run_main_windows(QWidget):
                 for camera_name in camera_names:
                     self.images_dict[camera_name].append(self.image.get(camera_name))
 
-            # if self.close_signal:
-            #     time.sleep(0.1)
-            # else:
-            #     time.sleep(0.1)
+            if self.close_signal:
+                # time.sleep(0.1)
+                pass
+            else:
+                time.sleep(0.95)
             if self.traja_reverse_signal is True and self.task_complete_step == 0:
                 self.task_complete_step = self.progress_value
         end_time = time.time()
@@ -1309,12 +1405,14 @@ class run_main_windows(QWidget):
             #     print(self.task_complete_step)
             #     self.result_label.setText("task complete")
         if self.complete_sign:
-            print(self.index - self.start_index)
+            # print(self.index - self.start_index)
             if self.index >= self.end_index :
                 print('task completed')
-                self.save_data()
+                print("stop")
                 self.action_plan.stop() 
                 self.task_timer.stop()
+                self.save_data()
+
                 self.complete_sign=False
             else:
                 self.save_data()
@@ -1323,13 +1421,13 @@ class run_main_windows(QWidget):
 
     def handle_feedback(self,feed_back):
         self.gpstate=feed_back
-        # print(self.gpstate)
+        # print("feed_back:",self.gpstate)
     def handle_traja_reverse_signal(self,traja_feed_back):
         self.traja_reverse_signal = traja_feed_back
         print(f"traja_reverse_signal :{traja_feed_back}")
     def handle_action_signal(self,action_feed_back):
-        print(action_feed_back[0],action_feed_back[1])
-        self.gpcontrol.set_state_flag(action_feed_back[0],action_feed_back[1])
+        # print(action_feed_back[0],action_feed_back[1])
+        self.gpcontrol.set_state_flag(action_feed_back)
     def handle_complete_signal(self,complete_feed_back):
         self.complete_sign =complete_feed_back
         print(f"complete_sign :{complete_feed_back}")
@@ -1406,13 +1504,13 @@ class run_main_windows(QWidget):
     #         self.result_label.setText(f"保存出错：{str(e)}")
     def save_data(self):
         try:
-            global save_signal
+            global save_signal,traj_signal
             save_signal = True
-
+            print("save_data signal",save_signal)
             data_dict = {}
             data_dict_add = {}
             self.action_list = self.qpos_list
-            self.max_episode_len = self.progress_value
+            max_episode_len = self.progress_value-1
 
             if self.qpos_list is not None:
                 self.qpos_array = np.vstack([self.qpos_list[0], self.qpos_list])  # 一次性拼接
@@ -1421,18 +1519,41 @@ class run_main_windows(QWidget):
             self.action_array = np.array(self.action_list)
             # 保存动作和关节状态
             data_dict = {
-                '/observations/qpos': self.qpos_array[:self.max_episode_len],
-                '/action': self.action_list[:self.max_episode_len],
+                '/observations/qpos': self.qpos_array[:max_episode_len],
+                '/action': self.action_list[:max_episode_len],
             }
 
             # 保存图像
             for cam_name in camera_names:
                 # 确保图像是np.array
-                images_np = np.stack(self.images_dict[cam_name][:self.max_episode_len], axis=0)  # (N, H, W, C)
+                images_np = np.stack(self.images_dict[cam_name][:max_episode_len], axis=0)  # (N, H, W, C)
                 data_dict[f'/observations/images/{cam_name}'] = images_np
 
             # 保存主文件
-            self.generator_hdf5.save_hdf5(data_dict, "./hdf5_file", self.index)
+            if traj_signal == 1:
+                self.generator_hdf5.save_hdf5(data_dict, "./hdf5_file_exchange_5-9", self.index,arm_name='all')
+            if traj_signal == 2:
+                self.generator_hdf5.save_hdf5(data_dict, "./hdf5_file_duikong_5-9", self.index,arm_name='left_arm')
+            data_dict['/observations/qpos'][:,:6] = np.degrees(data_dict['/observations/qpos'][:,:6])
+            data_dict['/observations/qpos'][:,8:14] = np.degrees(data_dict['/observations/qpos'][:,8:14])
+            # 增量转换
+            data_dict['/observations/qpos'][0, :] = 0
+            data_dict['/observations/qpos'][1:, :] = data_dict['/observations/qpos'][1:, :] - data_dict['/observations/qpos'][:-1, :]
+            # data_dict['/observations/qpos'][1:, 8:14] = data_dict['/observations/qpos'][1:, 8:14] - data_dict['/observations/qpos'][:-1, 8:14]
+            # print(type(data_dict['/action']))
+            data_dict['/action'] = np.array(data_dict['/action'])
+            data_dict['/action'][:,:6] = np.degrees(data_dict['/action'][:,:6])
+            data_dict['/action'][:,8:14] = np.degrees(data_dict['/action'][:,8:14])
+            # 增量转换
+            data_dict['/action'][1, :] = 0
+            data_dict['/action'][1:, :] = data_dict['/action'][1:, :] - data_dict['/action'][:-1, :]
+            # data_dict['/action'][1:, 8:14] = data_dict['/action'][1:, 8:14] - data_dict['/action'][:-1, 8:14]
+            # print(data_dict['/action'])
+            if traj_signal == 1:
+                self.generator_hdf5.save_hdf5(data_dict, "./hdf5_file_exchange_5-9_degrees", self.index,arm_name='all')
+            if traj_signal == 2:
+                self.generator_hdf5.save_hdf5(data_dict, "./hdf5_file_duikong_5-9_degrees", self.index,arm_name='left_arm')
+            # qpos_angle_list  = [math.radians(j) for j in data_dict['/observations/qpos'][:,:6]]
 
             # 清理原始数据
             self.progress_value = 0
@@ -1446,7 +1567,7 @@ class run_main_windows(QWidget):
                 square_color_post = np.array([0, 255, 0], dtype=np.uint8)  # 绿
 
                 for cam_name in camera_names:
-                    images = np.stack(self.images_dict[cam_name][:self.max_episode_len], axis=0)  # (N, H, W, C)
+                    images = np.stack(self.images_dict[cam_name][:max_episode_len], axis=0)  # (N, H, W, C)
                     height, width = images.shape[1:3]
 
                     # 应用色块：直接修改图像像素
@@ -1461,9 +1582,11 @@ class run_main_windows(QWidget):
 
             # 保存带标注图像的版本
             if data_dict_add:
-                data_dict_add['/observations/qpos'] = self.qpos_array[:self.max_episode_len]
-                data_dict_add['/action'] = self.action_array[:self.max_episode_len]
+                data_dict_add['/observations/qpos'] = self.qpos_array[:max_episode_len]
+                data_dict_add['/action'] = self.action_array[:max_episode_len]
                 self.generator_hdf5.save_hdf5(data_dict_add, "./hdf5_file_add", self.index, compressed=False)
+            for cam_name in camera_names:
+                self.images_dict[cam_name].clear()
 
             # 更新索引和状态
             self.task_complete_step = 0
@@ -1471,7 +1594,8 @@ class run_main_windows(QWidget):
 
             if self.index > self.end_index:
                 self.result_label.setText("task over please restart or close")
-            time.sleep(10)
+            # time.sleep(10)
+            
             save_signal = False
             
         except Exception as e:
@@ -1492,42 +1616,45 @@ class run_main_windows(QWidget):
     def start_camera(self):
         """启动摄像头"""
         self.stop_render =False
-        self.camera_timer.start(0)
+        self.camera_timer.start(10)
 
     def updata_frame(self):
         """更新摄像头图像"""
         global multi_device_sync_config
-        if self.camera.change_signal:
-            self.camera = CAMERA_HOT_PLUG()
-            frame_data, color_width, color_height = self.camera.rendering_frame()
+        # if self.camera.change_signal:
+            # self.camera = CAMERA_HOT_PLUG()
+        #     frame_data, color_width, color_height = self.camera.rendering_frame()
 
-        else:
-            frame_data, color_width, color_height = self.camera.rendering_frame()
+        # else:
+        multi_device_sync_config = self.camera.multi_device_sync_config
+        color_image_dict,depth_image_dict,color_width, color_height = self.camera.rendering_frame()
+        frame_data = color_image_dict
         # print(color_height,color_width)
         serial_number_list = self.camera.serial_number_list
         camera_index_map = {device['config']['camera_name']: serial_number_list.index(device["serial_number"]) for device in multi_device_sync_config.values() if device["serial_number"] in serial_number_list}
         # print(camera_index_map)
-        if isinstance(frame_data, dict):  # 多台摄像头返回字典 {str: np.ndarray}
-            if not frame_data:  # 字典为空
-                print("⚠️ WARN: 没有接收到任何摄像头图像")
-                return
-            if all(img.size == 0 for img in frame_data.values()):  # 所有相机的图像都是空的
-                print("⚠️ WARN: 所有摄像头的图像数据为空")
-                return
-            # print(f"⚠️ WARN: 多台摄像头，序列号列表: {serial_number_list}")
-        elif isinstance(frame_data, np.ndarray):  # 只有一台相机
-            if frame_data.size == 0:
-                print("⚠️ WARN: 没有接收到任何摄像头图像")
-                return
-            # 只有一个摄像头时，将其存入字典，模拟多摄像头格式
-            frame_data = {"0": frame_data}  
-            serial_number_list = ["0"]
-            print(f"⚠️ WARN: 只有一台摄像头，序列号为 {serial_number_list[0]}")
-        else:
-            print(f"⚠️ ERROR: 无效的 frame_data 类型: {type(frame_data)}")
-            return
+        # if isinstance(frame_data, dict):  # 多台摄像头返回字典 {str: np.ndarray}
+        #     if not frame_data:  # 字典为空
+        #         print("⚠️ WARN: 没有接收到任何摄像头图像")
+        #         return
+        #     if all(img.size == 0 for img in frame_data.values()):  # 所有相机的图像都是空的
+        #         print("⚠️ WARN: 所有摄像头的图像数据为空")
+        #         return
+        #     # print(f"⚠️ WARN: 多台摄像头，序列号列表: {serial_number_list}")
+        # elif isinstance(frame_data, np.ndarray):  # 只有一台相机
+        #     if frame_data.size == 0:
+        #         print("⚠️ WARN: 没有接收到任何摄像头图像")
+        #         return
+        #     # 只有一个摄像头时，将其存入字典，模拟多摄像头格式
+        #     frame_data = {"0": frame_data}  
+        #     serial_number_list = ["0"]
+        #     print(f"⚠️ WARN: 只有一台摄像头，序列号为 {serial_number_list[0]}")
+        # else:
+        #     print(f"⚠️ ERROR: 无效的 frame_data 类型: {type(frame_data)}")
+        #     return
         # 初始化结果图像
         result_image = None
+        # print(multi_device_sync_config.values())
         for device in multi_device_sync_config.values():
             cam_name, sn = device['config']['camera_name'], device["serial_number"]
             # print(cam_name,sn)
@@ -1538,7 +1665,7 @@ class run_main_windows(QWidget):
                     result_image = img  # 第一个摄像头的图像
                 else:
                     result_image = np.hstack((result_image, img))  # 按水平方向拼接图像
-
+        # print(result_image.shape)
         if result_image is not None:
             self.display_image(result_image)
             # print(type(np.array(frame_data.get(str(serial_number_list[camera_index_map['top']]), None))))

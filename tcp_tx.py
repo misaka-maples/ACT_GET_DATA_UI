@@ -24,7 +24,7 @@ class PersistentClient:
         self.vel = 100  #速度
         self.acc = 100  #加速度
         self.dcc = 100  #减速度
-        self.velocity = 60
+        self.velocity = 30
         # self._receive_thread = threading.Thread(target=self._receive_data, daemon=True)
         # self._receive_thread.start()  # 启动接收线程  
           
@@ -37,7 +37,7 @@ class PersistentClient:
     def connect(self):
         """建立长连接"""
         if self.sock:
-            self.sock.close()
+            self.sock.close() 
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.settimeout(5)  # 连接超时
@@ -116,8 +116,8 @@ class PersistentClient:
             self.sock.close()
             self.connected = False
             print("[INFO] 连接已关闭")
-    def set_speed(self,robotnum):
-        message = f"speed,{robotnum},{self.velocity}"
+    def set_speed(self,robotnum,velocity):
+        message = f"speed,{robotnum},{velocity}"
         self.send_message(message)
     def set_open(self,robotnum):
         message = f"open,{robotnum}"
@@ -265,11 +265,32 @@ class PersistentClient:
         # 返回接收到的响应字符串
 
 if __name__ == "__main__":
-    client = PersistentClient('192.168.2.14', 8001)
+    client = PersistentClient('192.168.3.15', 8001)
     client.set_close(2)
+    client.set_close(1)
     time.sleep(2)
+
     client.set_clear(2)
     client.set_open(2)  
+    
+    client.set_clear(1)
+    client.set_open(1) 
+    change_points_left = [
+                   
+                    [-127.205, -584.918, -238.196, 2.8373, -0.121059, 1.07089],#左手，先开爪
+                   [-122.71, -575.238, -306.627, 2.51576, -0.107987, 0.866255],
+                    [-124.89, -608.516, -345.528, 2.41849, 0.0261467, 0.859578],#关闭左，开右夹爪
+                   [-126.071, -676.698, -177.695, 2.5211, -0.176558, 1.30888],
+                   [-124.581, -752.295, -212.366, 2.47183, -0.00239102, 2.28396],
+                    [-129.127, -810.615, -288.951, 2.4716, -0.00248988, 2.28385],
+                     [-109.0, -811.015, -288.718, 2.47157, -0.00245327, 2.28383],
+                    [-129.127, -810.615, -288.951, 2.4716, -0.00248988, 2.28385],
+                   [-124.961, -813.379, -286.805, 2.47164, -0.00239282, 2.28384],
+                    [-41.0751, -734.438, 207.143, 2.28154, 0.145922, 2.31647],
+                    [629.137, -161.689, 590.811, 1.6477, 1.38221, 2.1665],
+                    [-41.0751, -734.438, 207.143, 2.28154, 0.145922, 2.31647],
+                      [-127.205, -584.918, -238.196, 2.8373, -0.121059, 1.07089]
+                       ]  # 存储所有点位
     while True:
         try:
             message = input("> ")  # 🟢 从命令行获取输入1
@@ -278,7 +299,11 @@ if __name__ == "__main__":
                 print("[INFO] 退出客户端...")
                 client.close()
                 break
-    
+            if message == "6":
+                for point in change_points_left:
+                    client.set_arm_position(point, "pose", 1)
+                    time.sleep(0.1)
+            
             if message == "1,1":
                 # while True:
                     joint_pose = client.get_arm_position_joint(1)
@@ -286,36 +311,51 @@ if __name__ == "__main__":
                     print(joint_pose,pose)
                     time.sleep(0.1)
             if message == "1,2":
-                deta = client.get_arm_position_joint(2)#[191.699, -68.037, 585.006, 1.08749, 1.40397, 1.99036]
+                deta = client.get_arm_position_pose(2)#[191.699, -68.037, 585.006, 1.08749, 1.40397, 1.99036]
                 print(deta)
             if message =="1,3":
-                client.set_close(1)
-                time.sleep(1)
-                client.set_clear(1)
-                client.set_open(1) 
-                client.set_arm_position([-127.243, -584.915, -238.195, 2.83726, -0.121101, 0.283056],"pose",1)
-
+                # client.set_close(1)
+                # time.sleep(1)
+                # client.set_clear(1)
+                # client.set_open(1) [-133.111, -603.627, -349.451, 2.41829, 0.0258569, 0.0772928]
+                client.set_arm_position(  [-127.205, -584.918, -238.196, 2.8373, -0.121059, 1.07089],"pose",1)
+            if message == "1,4":
+                client.set_arm_position([-122.71, -575.238, -306.627, 2.51576, -0.107987, 0.866255],"pose",1)
+            if message == "1,5":
+                client.set_arm_position([-106.669, -814.076, -287.101, 2.47181, -0.00227704, 1.49762],"pose",1)
             if message == "1":
-                client.set_speed(1)
-
+                client.set_speed(1,25)
+                client.set_speed(2,25)
             if message == "2":
-                client.set_arm_position([320.871, 8.02429, 569.908, -2.77289, 1.54682, -0.36409],"pose",2)
+                client.set_arm_position( [-127.243, -584.915, -238.195, 2.83726, -0.121101, 0.283056],"pose",1)
                 # client.set_arm_position([-135.806, -657.58, -132.078, 2.35454, 0.0848985, 1.51967],"pose",1)
                 # client.set_arm_position( [-81.1963, -580.862, 115.466, 2.73102, -0.00482064, 2.98929],"pose",1)
                 # client.set_arm_position( [-103.907, -629.442, -42.2999, 2.50661, -0.00864752, 3.0262],"pose",1)
             if message == "2,2":
-                deta = client.set_arm_position([-122.974, 633.268, -171.206, -2.37881, -0.126129, -3.09906],"pose",2)
+                deta = client.set_arm_position([320.871, 8.02429, 569.908, -2.77289, 1.54682, -0.36409],"pose",2)
+                print(deta)
+            if message == "2,3":
+                deta = client.set_arm_position([-77.3069, 482.59, 523.98, -1.74372, -0.200726, -1.37602],"pose",2)
                 print(deta)
             if message == "3":
-                i=1
-                while i <=10:
-                    client.set_arm_position([1.7504, -451.32, 831.73, 0.113867, 0.173187, -0.04549], "pose", 2) 
-                    print(client.get_arm_position_pose(2))
-                    client.set_arm_position([28.7504, -451.32, 831.73, 0.113867, 0.173187, -0.04549], "pose", 2)
-                    print(client.get_arm_position_pose(2))
-                    time.sleep(0.1)
-                    i += 1
-    
+                # i=1
+                # while i<=10:
+                client.set_arm_position( [-132.427, 620.664, -172.781, -2.37856, -0.125904, -3.09914], "pose", 2) 
+                    # print(client.get_arm_position_pose(2))
+                    # client.set_arm_position([28.7504, -451.32, 831.73, 0.113867, 0.173187, -0.04549], "pose", 2)
+                    # print(client.get_arm_position_pose(2))
+                    # time.sleep(0.1)
+                    # i += 1
+            if message == "4,2":
+                client.set_arm_position([-150.155, 202.934, 940.609, -0.76731, -0.377929, -1.09338],"pose",2)
+            if message == "4,4":
+                for _ in range(400):
+                    client.set_arm_position([320.871, 8.02429, 569.908, -2.77289, 1.54682, -0.36409],"pose",2)
+                    client.set_arm_position([-77.3069, 482.59, 523.98, -1.74372, -0.200726, -1.37602],"pose",2)
+                    client.set_arm_position([-134.846, 623.718, -169.467, -2.37875, -0.126138, -3.0992],"pose",2) 
+                    client.set_arm_position([-77.3069, 482.59, 523.98, -1.74372, -0.200726, -1.37602],"pose",2)
+                    # client.set_arm_position([320.871, 8.02429, 569.908, -2.77289, 1.54682, -0.36409],"pose",2)
+
             if message == "4":
                 client.set_close(1)
                 time.sleep(1)
