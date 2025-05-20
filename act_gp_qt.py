@@ -1528,22 +1528,25 @@ class run_main_windows(QWidget):
                 # 确保图像是np.array
                 images_np = np.stack(self.images_dict[cam_name][:max_episode_len], axis=0)  # (N, H, W, C)
                 data_dict[f'/observations/images/{cam_name}'] = images_np
-
+            data_dict['/action'] = np.array(data_dict['/action'])
+            data_dict['/observations/qpos'][:,:6] = np.degrees(data_dict['/observations/qpos'][:,:6])
+            data_dict['/observations/qpos'][:,8:14] = np.degrees(data_dict['/observations/qpos'][:,8:14])
+            data_dict['/action'][:,:6] = np.degrees(data_dict['/action'][:,:6])
+            data_dict['/action'][:,8:14] = np.degrees(data_dict['/action'][:,8:14])
+            
             # 保存主文件
             if traj_signal == 1:
                 self.generator_hdf5.save_hdf5(data_dict, "./hdf5_file_exchange_5-9", self.index,arm_name='all')
             if traj_signal == 2:
                 self.generator_hdf5.save_hdf5(data_dict, "./hdf5_file_duikong_5-9", self.index,arm_name='left_arm')
-            data_dict['/observations/qpos'][:,:6] = np.degrees(data_dict['/observations/qpos'][:,:6])
-            data_dict['/observations/qpos'][:,8:14] = np.degrees(data_dict['/observations/qpos'][:,8:14])
+
+            # data_dict['/observations/qpos'][1:, 8:14] = data_dict['/observations/qpos'][1:, 8:14] - data_dict['/observations/qpos'][:-1, 8:14]
+            # print(type(data_dict['/action']))
+            
+
             # 增量转换
             data_dict['/observations/qpos'][0, :] = 0
             data_dict['/observations/qpos'][1:, :] = data_dict['/observations/qpos'][1:, :] - data_dict['/observations/qpos'][:-1, :]
-            # data_dict['/observations/qpos'][1:, 8:14] = data_dict['/observations/qpos'][1:, 8:14] - data_dict['/observations/qpos'][:-1, 8:14]
-            # print(type(data_dict['/action']))
-            data_dict['/action'] = np.array(data_dict['/action'])
-            data_dict['/action'][:,:6] = np.degrees(data_dict['/action'][:,:6])
-            data_dict['/action'][:,8:14] = np.degrees(data_dict['/action'][:,8:14])
             # 增量转换
             data_dict['/action'][1, :] = 0
             data_dict['/action'][1:, :] = data_dict['/action'][1:, :] - data_dict['/action'][:-1, :]

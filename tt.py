@@ -1,5 +1,5 @@
 import numpy as np
-
+from tcp_tx import PersistentClient
 # 随机生成 (199, 16) 的弧度数据（范围：-π 到 π）
 arr = np.random.randint(low=2, high=3, size=(199, 16))
 arr = np.array([
@@ -26,20 +26,24 @@ change_points_left = [
                     [-41.0751, -734.438, 207.143, 2.28154, 0.145922, 2.31647],
                       [-127.205, -584.918, -238.196, 2.8373, -0.121059, 1.07089]
                        ]  # 存储所有点位
+robot = PersistentClient('192.168.3.15', 8001)
+for point in change_points_left:
+    robot.set_arm_position(point, "pose", 1)
+
 # print(arr)
 # 打印部分原始数据
-print("转换前（部分）：")
-print(arr[:1, 8:14])
+# print("转换前（部分）：")
+# print(arr[:1, 8:14])
 
-# 将第6列（索引5）和第9-14列（索引8-13）从弧度转换为角度
-# arr[:, :6] = np.degrees(arr[:, :6])
-# arr[:, 8:14] = np.degrees(arr[:, 8:14])
+# # 将第6列（索引5）和第9-14列（索引8-13）从弧度转换为角度
+# # arr[:, :6] = np.degrees(arr[:, :6])
+# # arr[:, 8:14] = np.degrees(arr[:, 8:14])
 
-# 打印部分转换后的数据
-print("\n转换后（部分）：")
-print(arr[:1, 8:14],arr[:1,14:])
-qpos = arr
-qpos[0,:]=0
-qpos[1:, :] = qpos[1:, :] - qpos[:-1, :]
-# qpos[1:, 8:14] = qpos[1:, 8:14] - qpos[:-1, 8:14]
-print(qpos.shape,qpos)
+# # 打印部分转换后的数据
+# print("\n转换后（部分）：")
+# print(arr[:1, 8:14],arr[:1,14:])
+# qpos = arr
+# qpos[0,:]=0
+# qpos[1:, :] = qpos[1:, :] - qpos[:-1, :]
+# # qpos[1:, 8:14] = qpos[1:, 8:14] - qpos[:-1, 8:14]
+# print(qpos.shape,qpos)
